@@ -3,6 +3,7 @@ import {
   Users,
   Plus,
   UserPlus,
+  UserCheck,
   Link2,
   ArrowRight,
   Upload,
@@ -33,21 +34,23 @@ import {
   Cell,
 } from 'recharts';
 import { supabase } from '../lib/supabase';
-import type {
-  Category,
-  SplitExpense,
-  SplitGroup,
-  SplitGroupMember,
-  SplitSyncSetting,
-  Workspace,
+import {
+  DEFAULT_EXPENSE_CATEGORY_NAMES,
+  type Category,
+  type SplitExpense,
+  type SplitGroup,
+  type SplitGroupMember,
+  type SplitSyncSetting,
+  type Workspace,
 } from '../lib/types';
 import {
   calculateGroupBalances,
   formatRelativeDateES,
 } from '../lib/splitUtils';
-import { formatEUR, getMonthKey } from '../lib/format';
+import { formatEUR, formatMonthLabel, getMonthKey } from '../lib/format';
 import { SplitExpenseModal } from '../components/SplitExpenseModal';
 import { SettleUpImportModal } from '../components/SettleUpImportModal';
+import { MonthStrip } from '../components/MonthStrip';
 
 interface GroupsProps {
   userId: string;
@@ -92,17 +95,24 @@ export function Groups({
   const [mySync, setMySync] = useState<SplitSyncSetting | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Crear nuevo grupo (con conexión automática activable desde el inicio)
+  // Crear nuevo grupo
   const [showNewGroup, setShowNewGroup] = useState(false);
   const [newGroupName, setNewGroupName] = useState('');
   const [newGroupAutoSync, setNewGroupAutoSync] = useState(true);
   const [newGroupWorkspaceId, setNewGroupWorkspaceId] = useState('');
   const [creatingGroup, setCreatingGroup] = useState(false);
 
+  // Panel de configuración y miembros
   const [showGroupTools, setShowGroupTools] = useState(false);
   const [memberName, setMemberName] = useState('');
   const [memberEmail, setMemberEmail] = useState('');
   const [memberError, setMemberError] = useState<string | null>(null);
+  const [memberSuccess, setMemberSuccess] = useState<string | null>(null);
+
+  // Vincular invitado a cuenta real
+  const [linkingMemberId, setLinkingMemberId] = useState<string | null>(null);
+  const [linkEmail, setLinkEmail] = useState('');
+  const [linkingSaving, setLinkingSaving] = useState(false);
 
   // Sincronización privada
   const [syncWorkspaceId, setSyncWorkspaceId] = useState('');
@@ -110,10 +120,17 @@ export function Groups({
   const [savingSync, setSavingSync] = useState(false);
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
 
-  // Transacciones y gráficos
+  // Filtro temporal del grupo (histórico completo vs mes concreto)
+  const now = new Date();
+  const [periodScope, setPeriodScope] = useState<'all' | 'month'>('all');
+  const [selectedYear, setSelectedYear] = useState(now.getFullYear());
+  const [selectedMonth, setSelectedMonth] = useState(now.getMonth());
+
+  // Transacciones, recategorización rápida y gráficos
   const [showAllTx, setShowAllTx] = useState(false);
   const [search, setSearch] = useState('');
   const [chartMonths, setChartMonths] = useState<6 | 12>(6);
+  const [updatingCatExpId, setUpdatingCatExpId] = useState<string | null>(null);
 
   // Modales
   const [expenseModalOpen, setExpenseModalOpen] = useState(false);
@@ -125,7 +142,6 @@ export function Groups({
   } | null>(null);
   const [importOpen, setImportOpen] = useState(false);
 
-  // Evita que el modal se abra automáticamente al montar o al cambiar de pestaña/grupo
   const lastHandledTriggerRef = useRef(openNewTrigger);
 
   useEffect(() => {
@@ -201,13 +217,15 @@ export function Groups({
   useEffect(() => {
     if (activeGroupId) {
       setSyncMsg(null);
+      setMemberError(null);
+      setMemberSuccess(null);
+      setLinkingMemberId(null);
       setShowAllTx(false);
       setSearch('');
       loadGroupDetails(activeGroupId);
     }
   }, [activeGroupId, loadGroupDetails]);
 
-  // Solo abre la calculadora cuando el usuario pulsa manualmente "+ Gasto grupo" o "+"
   useEffect(() => {
     if (openNewTrigger !== lastHandledTriggerRef.current) {
       lastHandledTriggerRef.current = openNewTrigger;
@@ -247,6 +265,7 @@ export function Groups({
     [workspaces, mySync]
   );
 
+  // Saldos y deudas reales (SIEMPRE sobre el histórico completo del grupo)
   const { balances, debts } = useMemo(
     () => calculateGroupBalances(members, expenses),
     [members, expenses]
@@ -260,34 +279,56 @@ export function Groups({
     };
   }, [balances]);
 
-  const myBalanceRow = useMemo(
-    () => balances.find((b) => b.memberId === myMember?.id) ?? null,
-    [balances, myMember]
+  // Filtro de periodo (histórico o mes concreto)
+  const selectedMonthKey = `${selectedYear}-${String(selectedMonth + 1).padStart(2, '0')}`;
+
+  const activeMonthKeys = useMemo(
+    () => new Set(expenses.map((e) => getMonthKey(e.expense_date))),
+    [expenses]
   );
 
-  const totalGroupSpent = useMemo(
+  const scopedExpenses = useMemo(() => {
+    if (periodScope === 'all') return expenses;
+    return expenses.filter(
+      (e) => getMonthKey(e.expense_date) === selectedMonthKey
+    );
+  }, [expenses, periodScope, selectedMonthKey]);
+
+  const { balances: scopedBalances } = useMemo(
+    () => calculateGroupBalances(members, scopedExpenses),
+    [members, scopedExpenses]
+  );
+
+  const myScopedBalanceRow = useMemo(
+    () => scopedBalances.find((b) => b.memberId === myMember?.id) ?? null,
+    [scopedBalances, myMember]
+  );
+
+  const totalScopedSpent = useMemo(
     () =>
-      expenses
+      scopedExpenses
         .filter((e) => e.type === 'expense')
         .reduce((acc, e) => acc + Number(e.total_amount), 0),
-    [expenses]
+    [scopedExpenses]
   );
 
   const memberComparisonChart = useMemo(
     () =>
-      balances.map((b) => ({
+      scopedBalances.map((b) => ({
         name: b.name,
         pagado: b.paid,
         consumo: b.consumed,
       })),
-    [balances]
+    [scopedBalances]
   );
 
   const monthlySeries = useMemo(() => {
-    const now = new Date();
+    const baseYear = periodScope === 'month' ? selectedYear : new Date().getFullYear();
+    const baseMonth = periodScope === 'month' ? selectedMonth : new Date().getMonth();
     const list: { key: string; label: string }[] = [];
+
     for (let i = chartMonths - 1; i >= 0; i--) {
-      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const d = new Date(baseYear, baseMonth - i, 1);
       const y = d.getFullYear();
       const m = d.getMonth();
       const key = `${y}-${String(m + 1).padStart(2, '0')}`;
@@ -319,11 +360,11 @@ export function Groups({
         miParte: Number(miParte.toFixed(2)),
       };
     });
-  }, [expenses, chartMonths, myMember]);
+  }, [expenses, chartMonths, myMember, periodScope, selectedYear, selectedMonth]);
 
   const categoryChart = useMemo(() => {
     const map = new Map<string, number>();
-    for (const e of expenses) {
+    for (const e of scopedExpenses) {
       if (e.type !== 'expense') continue;
       const cat = e.category_name || 'Otros gastos';
       map.set(cat, (map.get(cat) ?? 0) + Number(e.total_amount));
@@ -335,21 +376,22 @@ export function Groups({
         color: CHART_PALETTE[idx % CHART_PALETTE.length],
       }))
       .sort((a, b) => b.amount - a.amount);
-  }, [expenses]);
+  }, [scopedExpenses]);
 
   const filteredExpenses = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return expenses;
-    return expenses.filter((e) => {
+    if (!q) return scopedExpenses;
+    return scopedExpenses.filter((e) => {
       const payerName = memberMap.get(e.paid_by_member_id)?.display_name ?? '';
       const text = `${e.description} ${e.category_name} ${payerName}`.toLowerCase();
       return text.includes(q);
     });
-  }, [expenses, search, memberMap]);
+  }, [scopedExpenses, search, memberMap]);
 
-  const displayedExpenses = showAllTx
-    ? filteredExpenses
-    : filteredExpenses.slice(0, 4);
+  const displayedExpenses =
+    showAllTx || periodScope === 'month'
+      ? filteredExpenses
+      : filteredExpenses.slice(0, 4);
 
   const expenseCategoryNames = useMemo(
     () =>
@@ -358,6 +400,14 @@ export function Groups({
         .map((c) => c.name),
     [activeWorkspaceCategories]
   );
+
+  const quickCategoryOptions = useMemo(() => {
+    const set = new Set<string>([
+      ...expenseCategoryNames,
+      ...DEFAULT_EXPENSE_CATEGORY_NAMES,
+    ]);
+    return Array.from(set);
+  }, [expenseCategoryNames]);
 
   async function handleCreateGroup(e: React.FormEvent) {
     e.preventDefault();
@@ -411,6 +461,7 @@ export function Groups({
     e.preventDefault();
     if (!activeGroup || (!memberName.trim() && !memberEmail.trim())) return;
     setMemberError(null);
+    setMemberSuccess(null);
 
     const { error } = await supabase.rpc('add_split_group_member', {
       p_group_id: activeGroup.id,
@@ -425,7 +476,51 @@ export function Groups({
 
     setMemberName('');
     setMemberEmail('');
+    setMemberSuccess('Miembro añadido correctamente.');
     loadGroupDetails(activeGroup.id);
+  }
+
+  async function handleLinkGuest(e: React.FormEvent) {
+    e.preventDefault();
+    if (!activeGroup || !linkingMemberId || !linkEmail.trim()) return;
+
+    setLinkingSaving(true);
+    setMemberError(null);
+    setMemberSuccess(null);
+
+    const { error } = await supabase.rpc('link_split_guest_to_user', {
+      p_member_id: linkingMemberId,
+      p_email: linkEmail.trim(),
+    });
+
+    setLinkingSaving(false);
+    if (error) {
+      setMemberError(error.message);
+      return;
+    }
+
+    setLinkingMemberId(null);
+    setLinkEmail('');
+    setMemberSuccess(
+      'Invitado vinculado a su cuenta real. Todo su historial del grupo ya pertenece a su usuario.'
+    );
+    loadGroupDetails(activeGroup.id);
+  }
+
+  async function handleQuickCategoryChange(expId: string, newCategory: string) {
+    if (!activeGroup) return;
+    setUpdatingCatExpId(expId);
+
+    const { error } = await supabase.rpc('update_split_expense_category', {
+      p_expense_id: expId,
+      p_category_name: newCategory,
+    });
+
+    setUpdatingCatExpId(null);
+    if (!error) {
+      await loadGroupDetails(activeGroup.id);
+      onFinancesChanged();
+    }
   }
 
   async function handleSaveSync(backfill: boolean) {
@@ -456,7 +551,7 @@ export function Groups({
     } else if (syncEnabled) {
       setSyncMsg(
         expenses.length > 0
-          ? 'Conectado para futuros gastos. Si ya había gastos creados antes en este grupo, pulsa "Sincronizar previos" para pasarlos ahora.'
+          ? 'Conectado para futuros gastos. Si ya había gastos creados antes, pulsa "Sincronizar previos".'
           : 'Conectado: tu parte de cada gasto nuevo entrará sola en ese perfil.'
       );
     } else {
@@ -491,6 +586,11 @@ export function Groups({
   }
 
   const allSettled = debts.length === 0;
+  const isOwner = activeGroup?.created_by === userId;
+  const periodLabel =
+    periodScope === 'month'
+      ? formatMonthLabel(selectedYear, selectedMonth)
+      : 'Histórico total';
 
   return (
     <div className="space-y-5">
@@ -626,7 +726,7 @@ export function Groups({
         </div>
       )}
 
-      {/* Formulario rápido nuevo grupo (conectado por defecto a tus Finanzas) */}
+      {/* Formulario rápido nuevo grupo */}
       {showNewGroup && (
         <form
           onSubmit={handleCreateGroup}
@@ -690,6 +790,7 @@ export function Groups({
 
       {activeGroup && (
         <>
+          {/* PANEL DESPLEGABLE: SINCRONIZACIÓN, MIEMBROS (+ VINCULAR INVITADO), IMPORTAR Y BORRAR */}
           {showGroupTools && (
             <div className="bg-slate-900 border border-emerald-500/30 rounded-2xl p-5 space-y-5">
               <div className="flex items-center justify-between">
@@ -705,6 +806,7 @@ export function Groups({
                 </button>
               </div>
 
+              {/* 1. Conexión privada con Finanzas */}
               <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-3">
                 <div>
                   <p className="text-xs font-bold text-emerald-400 flex items-center gap-1.5">
@@ -763,31 +865,95 @@ export function Groups({
                 {syncMsg && <p className="text-xs text-emerald-300">{syncMsg}</p>}
               </div>
 
+              {/* 2. Miembros + Vincular invitado a cuenta real */}
               <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-3">
                 <p className="text-xs font-bold text-sky-400 flex items-center gap-1.5">
                   <UserPlus className="w-4 h-4" /> Miembros ({members.length})
                 </p>
-                <div className="flex flex-wrap gap-2">
+
+                <div className="space-y-2">
                   {members.map((m, idx) => (
-                    <span
+                    <div
                       key={m.id}
-                      className="inline-flex items-center gap-2 pl-1.5 pr-3 py-1 rounded-full bg-slate-900 border border-slate-800 text-xs text-slate-200"
+                      className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-xl bg-slate-900 border border-slate-800"
                     >
-                      <span
-                        className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold text-white"
-                        style={{
-                          backgroundColor: AVATAR_PALETTE[idx % AVATAR_PALETTE.length],
-                        }}
-                      >
-                        {m.display_name.charAt(0).toUpperCase()}
-                      </span>
-                      <strong>{m.display_name}</strong>
-                      <span className="text-[10px] text-slate-500">
-                        {m.user_id ? 'Cuenta' : 'Invitado'}
-                      </span>
-                    </span>
+                      <div className="flex items-center gap-2">
+                        <span
+                          className="w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-bold text-white shrink-0"
+                          style={{
+                            backgroundColor: AVATAR_PALETTE[idx % AVATAR_PALETTE.length],
+                          }}
+                        >
+                          {m.display_name.charAt(0).toUpperCase()}
+                        </span>
+                        <span className="text-xs font-semibold text-white">
+                          {m.display_name}
+                        </span>
+                        <span
+                          className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${
+                            m.user_id
+                              ? 'bg-emerald-500/15 text-emerald-300'
+                              : 'bg-slate-800 text-slate-400'
+                          }`}
+                        >
+                          {m.user_id ? 'Cuenta real' : 'Invitado'}
+                        </span>
+                      </div>
+
+                      {/* Botón para vincular un invitado existente a su cuenta real */}
+                      {!m.user_id && isOwner && (
+                        linkingMemberId === m.id ? (
+                          <form
+                            onSubmit={handleLinkGuest}
+                            className="flex items-center gap-1.5 w-full sm:w-auto mt-1 sm:mt-0"
+                          >
+                            <input
+                              type="email"
+                              required
+                              autoFocus
+                              value={linkEmail}
+                              onChange={(e) => setLinkEmail(e.target.value)}
+                              placeholder="Email de su cuenta..."
+                              className="flex-1 sm:w-52 bg-slate-950 border border-sky-500/50 rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none focus:border-sky-400"
+                            />
+                            <button
+                              type="submit"
+                              disabled={linkingSaving}
+                              className="px-2.5 py-1 bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold text-xs rounded-lg cursor-pointer"
+                            >
+                              {linkingSaving ? '...' : 'Vincular'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setLinkingMemberId(null);
+                                setLinkEmail('');
+                              }}
+                              className="p-1 text-slate-400 hover:text-white cursor-pointer"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </form>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setLinkingMemberId(m.id);
+                              setLinkEmail('');
+                              setMemberError(null);
+                              setMemberSuccess(null);
+                            }}
+                            className="flex items-center gap-1 px-2.5 py-1 bg-sky-500/10 hover:bg-sky-500/20 border border-sky-500/30 text-sky-300 text-[11px] font-semibold rounded-lg cursor-pointer"
+                          >
+                            <UserCheck className="w-3.5 h-3.5" />
+                            Vincular cuenta
+                          </button>
+                        )
+                      )}
+                    </div>
                   ))}
                 </div>
+
                 <form
                   onSubmit={handleAddMember}
                   className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-2 border-t border-slate-800"
@@ -814,8 +980,12 @@ export function Groups({
                   </button>
                 </form>
                 {memberError && <p className="text-xs text-rose-400">{memberError}</p>}
+                {memberSuccess && (
+                  <p className="text-xs text-emerald-400">{memberSuccess}</p>
+                )}
               </div>
 
+              {/* 3. Importar Settle Up y Borrar grupo */}
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <button
                   type="button"
@@ -826,7 +996,7 @@ export function Groups({
                   Importar CSV de Settle Up
                 </button>
 
-                {activeGroup.created_by === userId && (
+                {isOwner && (
                   <button
                     type="button"
                     onClick={handleDeleteGroup}
@@ -840,15 +1010,75 @@ export function Groups({
             </div>
           )}
 
+          {/* SELECTOR DE PERIODO DENTRO DEL GRUPO (HISTÓRICO VS POR MES) */}
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="inline-flex bg-slate-900 border border-slate-800 rounded-xl p-1">
+                <button
+                  type="button"
+                  onClick={() => setPeriodScope('all')}
+                  className={`px-3.5 py-1.5 text-xs font-semibold rounded-lg transition cursor-pointer ${
+                    periodScope === 'all'
+                      ? 'bg-emerald-500 text-slate-950'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  Todo el histórico
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPeriodScope('month')}
+                  className={`px-3.5 py-1.5 text-xs font-semibold rounded-lg transition cursor-pointer ${
+                    periodScope === 'month'
+                      ? 'bg-emerald-500 text-slate-950'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  Filtrar por mes
+                </button>
+              </div>
+
+              <div className="flex items-center gap-3 text-xs">
+                <span className="text-slate-400">
+                  {periodScope === 'month' ? 'Gasto del mes:' : 'Total grupo:'}{' '}
+                  <strong className="text-white">
+                    {formatEUR(totalScopedSpent)}
+                  </strong>
+                </span>
+                <span className="text-slate-400 hidden sm:inline">
+                  Tu parte:{' '}
+                  <strong className="text-sky-400">
+                    {formatEUR(myScopedBalanceRow?.consumed ?? 0)}
+                  </strong>
+                </span>
+              </div>
+            </div>
+
+            {periodScope === 'month' && (
+              <MonthStrip
+                selectedYear={selectedYear}
+                selectedMonth={selectedMonth}
+                onChangeMonth={(y, m) => {
+                  setSelectedYear(y);
+                  setSelectedMonth(m);
+                }}
+                activeMonthKeys={activeMonthKeys}
+              />
+            )}
+          </div>
+
           {/* TRANSACCIONES */}
           <section className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
             <div className="flex flex-wrap items-center justify-between gap-2 px-5 py-3.5 border-b border-slate-800/80">
               <h3 className="text-sm font-semibold text-slate-300">
-                Transacciones
+                Transacciones{' '}
+                <span className="text-xs font-normal text-slate-500">
+                  ({periodLabel})
+                </span>
               </h3>
 
               <div className="flex items-center gap-2">
-                {showAllTx && (
+                {(showAllTx || periodScope === 'month') && (
                   <div className="relative">
                     <Search className="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-1/2 -translate-y-1/2" />
                     <input
@@ -856,7 +1086,7 @@ export function Groups({
                       value={search}
                       onChange={(e) => setSearch(e.target.value)}
                       placeholder="Buscar..."
-                      className="bg-slate-950 border border-slate-800 rounded-lg pl-8 pr-2.5 py-1 text-xs text-white focus:outline-none focus:border-emerald-500 w-40 sm:w-56"
+                      className="bg-slate-950 border border-slate-800 rounded-lg pl-8 pr-2.5 py-1 text-xs text-white focus:outline-none focus:border-emerald-500 w-36 sm:w-52"
                     />
                   </div>
                 )}
@@ -876,8 +1106,9 @@ export function Groups({
 
             {displayedExpenses.length === 0 ? (
               <div className="p-8 text-center text-sm text-slate-400">
-                No hay transacciones todavía. Pulsa el botón verde{' '}
-                <strong className="text-emerald-400">+</strong> para añadir el primer gasto.
+                {periodScope === 'month'
+                  ? `No hay movimientos registrados en ${periodLabel}.`
+                  : 'No hay transacciones todavía. Pulsa el botón verde + para añadir el primer gasto.'}
               </div>
             ) : (
               <div className="divide-y divide-slate-800/70">
@@ -892,6 +1123,12 @@ export function Groups({
                     ? shares.find((s) => s.member_id === myMember.id)
                         ?.share_amount ?? 0
                     : 0;
+
+                  const rowCatOptions = quickCategoryOptions.includes(
+                    exp.category_name
+                  )
+                    ? quickCategoryOptions
+                    : [exp.category_name, ...quickCategoryOptions];
 
                   return (
                     <div
@@ -910,15 +1147,30 @@ export function Groups({
                           <p className="text-sm sm:text-base font-semibold text-white truncate">
                             {exp.description || exp.category_name}
                           </p>
-                          <p className="text-xs text-slate-400">
-                            {formatRelativeDateES(exp.expense_date)}
-                            {!isSettlement && exp.category_name !== 'Otros gastos' && (
-                              <span className="text-slate-500">
-                                {' '}
-                                · {exp.category_name}
-                              </span>
+                          <div className="flex flex-wrap items-center gap-1.5 text-xs text-slate-400 mt-0.5">
+                            <span>{formatRelativeDateES(exp.expense_date)}</span>
+                            {!isSettlement && (
+                              <>
+                                <span>·</span>
+                                {/* Selector rápido de categoría en 1 toque */}
+                                <select
+                                  aria-label="Cambiar categoría del gasto"
+                                  disabled={updatingCatExpId === exp.id}
+                                  value={exp.category_name}
+                                  onChange={(e) =>
+                                    handleQuickCategoryChange(exp.id, e.target.value)
+                                  }
+                                  className="bg-slate-950/90 hover:bg-slate-800 border border-slate-800 rounded-lg px-2 py-0.5 text-[11px] font-medium text-slate-200 focus:outline-none focus:border-emerald-500 cursor-pointer disabled:opacity-50"
+                                >
+                                  {rowCatOptions.map((catName) => (
+                                    <option key={catName} value={catName}>
+                                      {catName}
+                                    </option>
+                                  ))}
+                                </select>
+                              </>
                             )}
-                          </p>
+                          </div>
                           <p className="text-xs text-slate-400 mt-0.5">
                             {isSettlement ? (
                               <span className="text-sky-400 font-medium">
@@ -998,7 +1250,7 @@ export function Groups({
               </div>
             )}
 
-            {filteredExpenses.length > 4 && (
+            {periodScope === 'all' && filteredExpenses.length > 4 && (
               <button
                 type="button"
                 onClick={() => setShowAllTx((v) => !v)}
@@ -1011,9 +1263,16 @@ export function Groups({
             )}
           </section>
 
-          {/* DEUDAS */}
+          {/* DEUDAS (SIEMPRE ACUMULADO REAL DEL GRUPO) */}
           <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
-            <h3 className="text-sm font-semibold text-slate-300">Deudas</h3>
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-slate-300">
+                Deudas actuales
+              </h3>
+              <span className="text-[11px] text-slate-500">
+                Balance acumulado real
+              </span>
+            </div>
 
             {debts.length === 0 ? (
               <div className="flex items-center gap-2.5 text-sm text-emerald-400 font-medium">
@@ -1092,31 +1351,20 @@ export function Groups({
           {/* 3 GRÁFICOS DETALLADOS */}
           {expenses.some((e) => e.type === 'expense') && (
             <section className="space-y-4">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <h3 className="text-sm font-bold text-white flex items-center gap-2">
                   <BarChart3 className="w-4 h-4 text-emerald-400" />
-                  Análisis detallado de {activeGroup.name}
+                  Análisis de {activeGroup.name}{' '}
+                  <span className="text-xs font-normal text-slate-400">
+                    ({periodLabel})
+                  </span>
                 </h3>
-                <div className="flex items-center gap-3 text-xs">
-                  <span className="text-slate-400">
-                    Total grupo:{' '}
-                    <strong className="text-white">
-                      {formatEUR(totalGroupSpent)}
-                    </strong>
-                  </span>
-                  <span className="text-slate-400 hidden sm:inline">
-                    Tu consumo real:{' '}
-                    <strong className="text-sky-400">
-                      {formatEUR(myBalanceRow?.consumed ?? 0)}
-                    </strong>
-                  </span>
-                </div>
               </div>
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                 <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
                   <h4 className="text-sm font-semibold text-white mb-1">
-                    Pagado vs Consumo real por persona
+                    Pagado vs Consumo real ({periodLabel})
                   </h4>
                   <p className="text-[11px] text-slate-400 mb-4">
                     Cuánto ha adelantado cada uno frente a lo que realmente ha consumido.
@@ -1227,69 +1475,73 @@ export function Groups({
                 </div>
               </div>
 
-              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
-                <h4 className="text-sm font-semibold text-white mb-4">
-                  Distribución por categorías ({activeGroup.name})
-                </h4>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-center">
-                  <div className="h-52">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <PieChart>
-                        <Pie
-                          data={categoryChart}
-                          dataKey="amount"
-                          nameKey="name"
-                          innerRadius={52}
-                          outerRadius={82}
-                          paddingAngle={2}
-                        >
-                          {categoryChart.map((entry) => (
-                            <Cell key={entry.name} fill={entry.color} />
-                          ))}
-                        </Pie>
-                        <Tooltip
-                          contentStyle={{
-                            backgroundColor: '#0f172a',
-                            borderColor: '#334155',
-                            borderRadius: '12px',
-                            fontSize: '12px',
-                          }}
-                          formatter={(value) => formatEUR(Number(value ?? 0))}
-                        />
-                      </PieChart>
-                    </ResponsiveContainer>
-                  </div>
+              {categoryChart.length > 0 && (
+                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
+                  <h4 className="text-sm font-semibold text-white mb-4">
+                    Distribución por categorías ({periodLabel})
+                  </h4>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-center">
+                    <div className="h-52">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <PieChart>
+                          <Pie
+                            data={categoryChart}
+                            dataKey="amount"
+                            nameKey="name"
+                            innerRadius={52}
+                            outerRadius={82}
+                            paddingAngle={2}
+                          >
+                            {categoryChart.map((entry) => (
+                              <Cell key={entry.name} fill={entry.color} />
+                            ))}
+                          </Pie>
+                          <Tooltip
+                            contentStyle={{
+                              backgroundColor: '#0f172a',
+                              borderColor: '#334155',
+                              borderRadius: '12px',
+                              fontSize: '12px',
+                            }}
+                            formatter={(value) => formatEUR(Number(value ?? 0))}
+                          />
+                        </PieChart>
+                      </ResponsiveContainer>
+                    </div>
 
-                  <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
-                    {categoryChart.map((c) => {
-                      const pct =
-                        totalGroupSpent > 0 ? (c.amount / totalGroupSpent) * 100 : 0;
-                      return (
-                        <div
-                          key={c.name}
-                          className="flex items-center justify-between text-xs gap-2"
-                        >
-                          <div className="flex items-center gap-2 min-w-0">
-                            <span
-                              className="w-2.5 h-2.5 rounded-full shrink-0"
-                              style={{ backgroundColor: c.color }}
-                            />
-                            <span className="text-slate-200 truncate">{c.name}</span>
+                    <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+                      {categoryChart.map((c) => {
+                        const pct =
+                          totalScopedSpent > 0
+                            ? (c.amount / totalScopedSpent) * 100
+                            : 0;
+                        return (
+                          <div
+                            key={c.name}
+                            className="flex items-center justify-between text-xs gap-2"
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span
+                                className="w-2.5 h-2.5 rounded-full shrink-0"
+                                style={{ backgroundColor: c.color }}
+                              />
+                              <span className="text-slate-200 truncate">{c.name}</span>
+                            </div>
+                            <div className="shrink-0">
+                              <span className="font-semibold text-white">
+                                {formatEUR(c.amount)}
+                              </span>
+                              <span className="text-slate-500 ml-1.5">
+                                ({pct.toFixed(0)}%)
+                              </span>
+                            </div>
                           </div>
-                          <div className="shrink-0">
-                            <span className="font-semibold text-white">
-                              {formatEUR(c.amount)}
-                            </span>
-                            <span className="text-slate-500 ml-1.5">
-                              ({pct.toFixed(0)}%)
-                            </span>
-                          </div>
-                        </div>
-                      );
-                    })}
+                        );
+                      })}
+                    </div>
                   </div>
                 </div>
-              </div>
+              )}
             </section>
           )}
 

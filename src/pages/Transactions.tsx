@@ -44,6 +44,7 @@ export function Transactions({
   const [typeFilter, setTypeFilter] = useState<'all' | TransactionType>('all');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [fixedFilter, setFixedFilter] = useState<'all' | 'fixed' | 'variable'>('all');
+  const [updatingCatId, setUpdatingCatId] = useState<string | null>(null);
 
   const currentMonthKey = `${selectedYear}-${String(selectedMonth + 1).padStart(2, '0')}`;
 
@@ -84,6 +85,16 @@ export function Transactions({
     search,
     catMap,
   ]);
+
+  async function handleQuickCategoryChange(tx: Transaction, newCategoryId: string) {
+    setUpdatingCatId(tx.id);
+    const { error } = await supabase
+      .from('transactions')
+      .update({ category_id: newCategoryId || null })
+      .eq('id', tx.id);
+    setUpdatingCatId(null);
+    if (!error) onDeleted();
+  }
 
   async function handleDelete(id: string) {
     if (!window.confirm('¿Seguro que quieres eliminar este movimiento?')) return;
@@ -208,6 +219,12 @@ export function Transactions({
                 ? 'text-sky-400'
                 : 'text-rose-400';
 
+            const rowCategories = categories.filter(
+              (c) =>
+                c.type === tx.type &&
+                (!c.is_archived || c.id === tx.category_id)
+            );
+
             return (
               <div
                 key={tx.id}
@@ -234,10 +251,28 @@ export function Transactions({
                         </span>
                       )}
                     </div>
-                    <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-slate-400 mt-0.5">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-400 mt-1">
                       <span>{formatDateES(tx.transaction_date)}</span>
                       <span>·</span>
-                      <span>{cat?.name ?? 'Sin categoría'}</span>
+                      {/* Selector rápido de categoría en 1 toque */}
+                      <select
+                        aria-label="Cambiar categoría rápidamente"
+                        disabled={updatingCatId === tx.id}
+                        value={tx.category_id ?? ''}
+                        onChange={(e) =>
+                          handleQuickCategoryChange(tx, e.target.value)
+                        }
+                        className="bg-slate-950/90 hover:bg-slate-800 border border-slate-800 rounded-lg px-2 py-0.5 text-[11px] font-medium text-slate-200 focus:outline-none focus:border-emerald-500 cursor-pointer disabled:opacity-50"
+                      >
+                        {!tx.category_id && (
+                          <option value="">Sin categoría</option>
+                        )}
+                        {rowCategories.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.name}
+                          </option>
+                        ))}
+                      </select>
                       <span>·</span>
                       <span>{tx.payment_method}</span>
                       {workspace.type === 'shared' && tx.profiles?.full_name && (
