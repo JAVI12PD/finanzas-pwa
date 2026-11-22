@@ -12,12 +12,15 @@ import {
   CheckCircle2,
   Search,
   RefreshCw,
+  RotateCcw,
   Handshake,
   Loader2,
   X,
+  Check,
   SlidersHorizontal,
   BarChart3,
   List,
+  FileSpreadsheet,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -96,7 +99,6 @@ export function Groups({
   const [mySync, setMySync] = useState<SplitSyncSetting | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Vista interna limpia: Actividad (Transacciones + Deudas) vs Gráficos
   const [subView, setSubView] = useState<'activity' | 'charts'>('activity');
 
   // Crear nuevo grupo
@@ -113,16 +115,21 @@ export function Groups({
   const [memberError, setMemberError] = useState<string | null>(null);
   const [memberSuccess, setMemberSuccess] = useState<string | null>(null);
 
+  // Editar nombre de miembro
+  const [renamingMemberId, setRenamingMemberId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+
   // Vincular invitado a cuenta real
   const [linkingMemberId, setLinkingMemberId] = useState<string | null>(null);
   const [linkEmail, setLinkEmail] = useState('');
   const [linkingSaving, setLinkingSaving] = useState(false);
 
-  // Sincronización privada
+  // Sincronización privada y reversión CSV
   const [syncWorkspaceId, setSyncWorkspaceId] = useState('');
   const [syncEnabled, setSyncEnabled] = useState(false);
   const [savingSync, setSavingSync] = useState(false);
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
+  const [revertingBatchId, setRevertingBatchId] = useState<string | null>(null);
 
   // Filtro temporal del grupo
   const now = new Date();
@@ -224,6 +231,7 @@ export function Groups({
       setMemberError(null);
       setMemberSuccess(null);
       setLinkingMemberId(null);
+      setRenamingMemberId(null);
       setShowAllTx(false);
       setSearch('');
       loadGroupDetails(activeGroupId);
@@ -269,7 +277,43 @@ export function Groups({
     [workspaces, mySync]
   );
 
-  // Saldos y deudas reales (SIEMPRE sobre el histórico completo del grupo)
+  // Detectar lotes de CSV importados (incluyendo cargas previas de Settle Up)
+  const importBatches = useMemo(() => {
+    const map = new Map<
+      string,
+      { batchId: string; filename: string; count: number; total: number }
+    >();
+
+    for (const e of expenses) {
+      const batchId =
+        e.import_batch_id ??
+        (e.external_ref?.startsWith('su|') ? '__legacy_settleup__' : null);
+      if (!batchId) continue;
+
+      const label =
+        e.import_filename ||
+        (batchId === '__legacy_settleup__'
+          ? 'Importación CSV previa (Settle Up)'
+          : 'Importación CSV');
+
+      const existing = map.get(batchId);
+      const amt = e.type === 'expense' ? Number(e.total_amount) : 0;
+      if (existing) {
+        existing.count += 1;
+        existing.total += amt;
+      } else {
+        map.set(batchId, {
+          batchId,
+          filename: label,
+          count: 1,
+          total: amt,
+        });
+      }
+    }
+
+    return Array.from(map.values());
+  }, [expenses]);
+
   const { balances, debts } = useMemo(
     () => calculateGroupBalances(members, expenses),
     [members, expenses]
@@ -483,6 +527,51 @@ export function Groups({
     loadGroupDetails(activeGroup.id);
   }
 
+  async function handleRenameMember(e: React.FormEvent) {
+    e.preventDefault();
+    if (!activeGroup || !renamingMemberId || !renameValue.trim()) return;
+    setMemberError(null);
+    setMemberSuccess(null);
+
+    const { error } = await supabase.rpc('rename_split_group_member', {
+      p_member_id: renamingMemberId,
+      p_new_name: renameValue.trim(),
+    });
+
+    if (error) {
+      setMemberError(error.message);
+      return;
+    }
+
+    setRenamingMemberId(null);
+    setRenameValue('');
+    setMemberSuccess('Nombre del miembro actualizado.');
+    loadGroupDetails(activeGroup.id);
+  }
+
+  async function handleDeleteMember(m: SplitGroupMember) {
+    if (!activeGroup) return;
+    setMemberError(null);
+    setMemberSuccess(null);
+
+    const ok = window.confirm(
+      `¿Eliminar a "${m.display_name}" del grupo "${activeGroup.name}"?`
+    );
+    if (!ok) return;
+
+    const { error } = await supabase.rpc('delete_split_group_member', {
+      p_member_id: m.id,
+    });
+
+    if (error) {
+      setMemberError(error.message);
+      return;
+    }
+
+    setMemberSuccess(`"${m.display_name}" eliminado del grupo.`);
+    loadGroupDetails(activeGroup.id);
+  }
+
   async function handleLinkGuest(e: React.FormEvent) {
     e.preventDefault();
     if (!activeGroup || !linkingMemberId || !linkEmail.trim()) return;
@@ -565,6 +654,56 @@ export function Groups({
     onFinancesChanged();
   }
 
+  async function handleUnsyncMyFinances() {
+    if (!activeGroup) return;
+    const ok = window.confirm(
+      `¿Quitar de tus Finanzas personales los gastos sincronizados de "${activeGroup.name}"? El grupo y sus deudas seguirán intactos.`
+    );
+    if (!ok) return;
+
+    setSavingSync(true);
+    setSyncMsg(null);
+
+    const { data, error } = await supabase.rpc('unsync_my_group_transactions', {
+      p_group_id: activeGroup.id,
+    });
+
+    setSavingSync(false);
+    if (error) {
+      setSyncMsg('Error: ' + error.message);
+      return;
+    }
+
+    setSyncMsg(
+      `Se han quitado ${Number(data ?? 0)} movimiento(s) de tus Finanzas (el grupo sigue intacto).`
+    );
+    onFinancesChanged();
+  }
+
+  async function handleRevertBatch(batchId: string, filename: string, count: number) {
+    if (!activeGroup) return;
+    const ok = window.confirm(
+      `¿Revertir "${filename}"? Se eliminarán los ${count} movimientos importados de este grupo y también se borrarán automáticamente de las Finanzas sincronizadas.`
+    );
+    if (!ok) return;
+
+    setRevertingBatchId(batchId);
+    const { data, error } = await supabase.rpc('revert_split_import_batch', {
+      p_group_id: activeGroup.id,
+      p_batch_id: batchId,
+    });
+    setRevertingBatchId(null);
+
+    if (error) {
+      setSyncMsg('Error al revertir: ' + error.message);
+      return;
+    }
+
+    setSyncMsg(`Carga revertida: ${Number(data ?? 0)} movimientos eliminados.`);
+    await loadGroupDetails(activeGroup.id);
+    onFinancesChanged();
+  }
+
   async function handleDeleteExpense(expId: string) {
     if (
       !window.confirm(
@@ -597,11 +736,10 @@ export function Groups({
 
   return (
     <div className="space-y-5">
-      {/* ZONA HERO ESTILO SETTLE UP (SIN SOLAPAMIENTOS Y CON COLORES CLAROS) */}
+      {/* ZONA HERO ESTILO SETTLE UP */}
       {activeGroup ? (
         <div className="bg-slate-950 border border-slate-800/80 rounded-3xl overflow-hidden shadow-xl">
           <div className="relative pt-14 sm:pt-12 pb-6 px-4 bg-gradient-to-b from-slate-950 via-slate-950 to-slate-900/70">
-            {/* Estado de sincronización arriba izquierda */}
             <button
               type="button"
               onClick={() => setShowGroupTools(true)}
@@ -618,7 +756,6 @@ export function Groups({
                 : 'Sin sync'}
             </button>
 
-            {/* Botón configuración del grupo arriba derecha */}
             <button
               type="button"
               onClick={() => setShowGroupTools((v) => !v)}
@@ -647,7 +784,6 @@ export function Groups({
                 </div>
               ) : (
                 <>
-                  {/* Burbuja principal: quien tiene el mayor saldo negativo */}
                   <div className="w-44 h-44 sm:w-48 sm:h-48 rounded-full bg-emerald-600 shadow-2xl shadow-emerald-600/25 flex flex-col items-center justify-center text-center p-4 border-2 border-emerald-400/30 shrink-0">
                     <p className="text-base sm:text-lg font-medium text-emerald-50 truncate max-w-[140px]">
                       {heroBalances.primary.name}
@@ -660,7 +796,6 @@ export function Groups({
                     </p>
                   </div>
 
-                  {/* Resto de miembros en burbujas limpias sin solapamiento */}
                   {heroBalances.others.length > 0 && (
                     <div className="flex flex-wrap items-center justify-center gap-3 max-w-md">
                       {heroBalances.others.map((b) => {
@@ -702,7 +837,6 @@ export function Groups({
             </div>
           </div>
 
-          {/* Pestañas horizontales de grupos */}
           <div className="flex items-center border-t border-slate-800/80 bg-slate-950 overflow-x-auto px-2">
             {groups.map((g) => {
               const active = g.id === activeGroupId;
@@ -818,7 +952,7 @@ export function Groups({
 
       {activeGroup && (
         <>
-          {/* PANEL DESPLEGABLE: CONFIGURACIÓN, SYNC, MIEMBROS E IMPORTACIÓN */}
+          {/* PANEL DESPLEGABLE: SYNC, MIEMBROS (EDITAR/BORRAR/VINCULAR) Y CARGAS CSV */}
           {showGroupTools && (
             <div className="bg-slate-900 border border-emerald-500/30 rounded-2xl p-5 space-y-5">
               <div className="flex items-center justify-between">
@@ -834,13 +968,14 @@ export function Groups({
                 </button>
               </div>
 
+              {/* 1. Conexión privada con Finanzas */}
               <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-3">
                 <div>
                   <p className="text-xs font-bold text-emerald-400 flex items-center gap-1.5">
                     <Link2 className="w-4 h-4" /> Tu conexión privada con Finanzas
                   </p>
                   <p className="text-[11px] text-slate-400 mt-0.5">
-                    Elige a qué cuenta (ej. <strong>JAVI</strong> o <strong>CASA</strong>) se enviará únicamente <strong>tu parte</strong> de cada gasto de este grupo.
+                    Elige a qué cuenta (ej. <strong>JAVI</strong> o <strong>CASA</strong>) se enviará únicamente <strong>tu parte</strong> de cada gasto.
                   </p>
                 </div>
 
@@ -888,10 +1023,24 @@ export function Groups({
                       Sincronizar previos
                     </button>
                   )}
+
+                  {expenses.length > 0 && (
+                    <button
+                      type="button"
+                      disabled={savingSync}
+                      onClick={handleUnsyncMyFinances}
+                      title="Borra de tus Movimientos personales los gastos sincronizados de este grupo sin tocar el grupo"
+                      className="flex items-center gap-1 px-3 py-2 bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 font-semibold text-xs rounded-xl cursor-pointer"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5 text-amber-400" />
+                      Quitar de mis Finanzas
+                    </button>
+                  )}
                 </div>
                 {syncMsg && <p className="text-xs text-emerald-300">{syncMsg}</p>}
               </div>
 
+              {/* 2. Miembros (Editar nombre, Eliminar y Vincular a cuenta real) */}
               <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-3">
                 <p className="text-xs font-bold text-sky-400 flex items-center gap-1.5">
                   <UserPlus className="w-4 h-4" /> Miembros ({members.length})
@@ -903,77 +1052,148 @@ export function Groups({
                       key={m.id}
                       className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-xl bg-slate-900 border border-slate-800"
                     >
-                      <div className="flex items-center gap-2">
-                        <span
-                          className="w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-bold text-white shrink-0"
-                          style={{
-                            backgroundColor: AVATAR_PALETTE[idx % AVATAR_PALETTE.length],
-                          }}
+                      {renamingMemberId === m.id ? (
+                        <form
+                          onSubmit={handleRenameMember}
+                          className="flex items-center gap-1.5 flex-1 min-w-[200px]"
                         >
-                          {m.display_name.charAt(0).toUpperCase()}
-                        </span>
-                        <span className="text-xs font-semibold text-white">
-                          {m.display_name}
-                        </span>
-                        <span
-                          className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${
-                            m.user_id
-                              ? 'bg-emerald-500/15 text-emerald-300'
-                              : 'bg-slate-800 text-slate-400'
-                          }`}
-                        >
-                          {m.user_id ? 'Cuenta real' : 'Invitado'}
-                        </span>
-                      </div>
-
-                      {!m.user_id && isOwner && (
-                        linkingMemberId === m.id ? (
-                          <form
-                            onSubmit={handleLinkGuest}
-                            className="flex items-center gap-1.5 w-full sm:w-auto mt-1 sm:mt-0"
+                          <input
+                            type="text"
+                            required
+                            autoFocus
+                            value={renameValue}
+                            onChange={(e) => setRenameValue(e.target.value)}
+                            className="flex-1 bg-slate-950 border border-emerald-500/60 rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none"
+                          />
+                          <button
+                            type="submit"
+                            className="p-1.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-lg cursor-pointer"
+                            title="Guardar nombre"
                           >
-                            <input
-                              type="email"
-                              required
-                              autoFocus
-                              value={linkEmail}
-                              onChange={(e) => setLinkEmail(e.target.value)}
-                              placeholder="Email de su cuenta..."
-                              className="flex-1 sm:w-52 bg-slate-950 border border-sky-500/50 rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none focus:border-sky-400"
-                            />
-                            <button
-                              type="submit"
-                              disabled={linkingSaving}
-                              className="px-2.5 py-1 bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold text-xs rounded-lg cursor-pointer"
-                            >
-                              {linkingSaving ? '...' : 'Vincular'}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setLinkingMemberId(null);
-                                setLinkEmail('');
-                              }}
-                              className="p-1 text-slate-400 hover:text-white cursor-pointer"
-                            >
-                              <X className="w-3.5 h-3.5" />
-                            </button>
-                          </form>
-                        ) : (
+                            <Check className="w-3.5 h-3.5" />
+                          </button>
                           <button
                             type="button"
                             onClick={() => {
-                              setLinkingMemberId(m.id);
-                              setLinkEmail('');
+                              setRenamingMemberId(null);
+                              setRenameValue('');
+                            }}
+                            className="p-1.5 text-slate-400 hover:text-white rounded-lg cursor-pointer"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </form>
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          <span
+                            className="w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-bold text-white shrink-0"
+                            style={{
+                              backgroundColor:
+                                AVATAR_PALETTE[idx % AVATAR_PALETTE.length],
+                            }}
+                          >
+                            {m.display_name.charAt(0).toUpperCase()}
+                          </span>
+                          <span className="text-xs font-semibold text-white">
+                            {m.display_name}
+                          </span>
+                          <span
+                            className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${
+                              m.user_id
+                                ? 'bg-emerald-500/15 text-emerald-300'
+                                : 'bg-slate-800 text-slate-400'
+                            }`}
+                          >
+                            {m.role === 'owner'
+                              ? 'Creador'
+                              : m.user_id
+                              ? 'Cuenta real'
+                              : 'Invitado'}
+                          </span>
+                        </div>
+                      )}
+
+                      {renamingMemberId !== m.id && (
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          {/* Vincular invitado a cuenta real */}
+                          {!m.user_id && isOwner && (
+                            linkingMemberId === m.id ? (
+                              <form
+                                onSubmit={handleLinkGuest}
+                                className="flex items-center gap-1.5"
+                              >
+                                <input
+                                  type="email"
+                                  required
+                                  autoFocus
+                                  value={linkEmail}
+                                  onChange={(e) => setLinkEmail(e.target.value)}
+                                  placeholder="Email de su cuenta..."
+                                  className="w-44 bg-slate-950 border border-sky-500/50 rounded-lg px-2.5 py-1 text-xs text-white focus:outline-none focus:border-sky-400"
+                                />
+                                <button
+                                  type="submit"
+                                  disabled={linkingSaving}
+                                  className="px-2.5 py-1 bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold text-xs rounded-lg cursor-pointer"
+                                >
+                                  {linkingSaving ? '...' : 'Vincular'}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setLinkingMemberId(null);
+                                    setLinkEmail('');
+                                  }}
+                                  className="p-1 text-slate-400 hover:text-white cursor-pointer"
+                                >
+                                  <X className="w-3.5 h-3.5" />
+                                </button>
+                              </form>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setLinkingMemberId(m.id);
+                                  setLinkEmail('');
+                                  setMemberError(null);
+                                  setMemberSuccess(null);
+                                }}
+                                className="flex items-center gap-1 px-2.5 py-1 bg-sky-500/10 hover:bg-sky-500/20 border border-sky-500/30 text-sky-300 text-[11px] font-semibold rounded-lg cursor-pointer"
+                              >
+                                <UserCheck className="w-3.5 h-3.5" />
+                                Vincular cuenta
+                              </button>
+                            )
+                          )}
+
+                          {/* Editar nombre */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setRenamingMemberId(m.id);
+                              setRenameValue(m.display_name);
+                              setLinkingMemberId(null);
                               setMemberError(null);
                               setMemberSuccess(null);
                             }}
-                            className="flex items-center gap-1 px-2.5 py-1 bg-sky-500/10 hover:bg-sky-500/20 border border-sky-500/30 text-sky-300 text-[11px] font-semibold rounded-lg cursor-pointer"
+                            className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg cursor-pointer"
+                            title="Editar nombre"
                           >
-                            <UserCheck className="w-3.5 h-3.5" />
-                            Vincular cuenta
+                            <Pencil className="w-3.5 h-3.5" />
                           </button>
-                        )
+
+                          {/* Eliminar miembro (solo owner y no sobre sí mismo) */}
+                          {isOwner && m.role !== 'owner' && (
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteMember(m)}
+                              className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-slate-800 rounded-lg cursor-pointer"
+                              title="Eliminar miembro"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
                       )}
                     </div>
                   ))}
@@ -1010,6 +1230,48 @@ export function Groups({
                 )}
               </div>
 
+              {/* 3. Cargas CSV importadas (con reversión completa en 1 clic) */}
+              {importBatches.length > 0 && isOwner && (
+                <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-2.5">
+                  <p className="text-xs font-bold text-amber-400 flex items-center gap-1.5">
+                    <FileSpreadsheet className="w-4 h-4" /> Cargas CSV importadas
+                  </p>
+                  <div className="space-y-2">
+                    {importBatches.map((batch) => (
+                      <div
+                        key={batch.batchId}
+                        className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-xs"
+                      >
+                        <div>
+                          <p className="font-semibold text-white">{batch.filename}</p>
+                          <p className="text-[11px] text-slate-400">
+                            {batch.count} movimientos · {formatEUR(batch.total)}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          disabled={revertingBatchId === batch.batchId}
+                          onClick={() =>
+                            handleRevertBatch(
+                              batch.batchId,
+                              batch.filename,
+                              batch.count
+                            )
+                          }
+                          className="flex items-center gap-1 px-3 py-1.5 bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/30 text-rose-300 font-semibold rounded-lg cursor-pointer"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5" />
+                          {revertingBatchId === batch.batchId
+                            ? 'Revirtiendo...'
+                            : 'Revertir carga'}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* 4. Acciones generales */}
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <button
                   type="button"
@@ -1037,7 +1299,6 @@ export function Groups({
           {/* BARRA UNIFICADA: ACTIVIDAD / GRÁFICOS + FILTRO DE PERIODO */}
           <div className="space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              {/* Selector de vista dentro del grupo */}
               <div className="inline-flex bg-slate-900 border border-slate-800 rounded-xl p-1">
                 <button
                   type="button"
@@ -1065,7 +1326,6 @@ export function Groups({
                 </button>
               </div>
 
-              {/* Filtro de periodo compacto + totales */}
               <div className="flex flex-wrap items-center gap-3">
                 <div className="inline-flex bg-slate-900 border border-slate-800 rounded-xl p-1 text-xs">
                   <button
@@ -1122,12 +1382,9 @@ export function Groups({
             )}
           </div>
 
-          {/* =============================================================== */}
-          {/* SUB-VISTA 1: ACTIVIDAD (TRANSACCIONES + DEUDAS)                 */}
-          {/* =============================================================== */}
+          {/* SUB-VISTA 1: ACTIVIDAD */}
           {subView === 'activity' ? (
             <div className="space-y-5">
-              {/* TRANSACCIONES */}
               <section className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
                 <div className="flex flex-wrap items-center justify-between gap-2 px-5 py-3.5 border-b border-slate-800/80">
                   <h3 className="text-sm font-semibold text-slate-300">
@@ -1309,7 +1566,6 @@ export function Groups({
                 )}
               </section>
 
-              {/* DEUDAS ACTUALES */}
               <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
                 <div className="flex items-center justify-between">
                   <h3 className="text-sm font-semibold text-slate-300">
@@ -1395,9 +1651,7 @@ export function Groups({
               </section>
             </div>
           ) : (
-            /* =============================================================== */
-            /* SUB-VISTA 2: GRÁFICOS Y ANÁLISIS DETALLADO                      */
-            /* =============================================================== */
+            /* SUB-VISTA 2: GRÁFICOS */
             <section className="space-y-4">
               {!expenses.some((e) => e.type === 'expense') ? (
                 <div className="bg-slate-900 border border-slate-800 rounded-2xl p-10 text-center text-sm text-slate-400">
@@ -1405,7 +1659,6 @@ export function Groups({
                 </div>
               ) : (
                 <>
-                  {/* KPIs rápidos del periodo en móvil y escritorio */}
                   <div className="grid grid-cols-2 gap-3">
                     <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
                       <p className="text-xs text-slate-400">

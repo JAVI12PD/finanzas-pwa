@@ -116,6 +116,8 @@ export interface SplitExpense {
   category_name: string;
   payment_method: string;
   external_ref: string | null;
+  import_batch_id?: string | null;
+  import_filename?: string | null;
   created_at: string;
   split_expense_shares: SplitExpenseShare[];
 }
