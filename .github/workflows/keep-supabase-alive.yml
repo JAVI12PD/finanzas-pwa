@@ -1,0 +1,22 @@
+name: Mantener Supabase activo
+
+on:
+  schedule:
+    - cron: '0 9 */4 * *'
+  workflow_dispatch:
+
+jobs:
+  ping-supabase:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping seguro a PostgreSQL (PostgREST)
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            "${{ secrets.SUPABASE_URL }}/rest/v1/profiles?select=id&limit=1" \
+            -H "apikey: ${{ secrets.SUPABASE_ANON_KEY }}" \
+            -H "Authorization: Bearer ${{ secrets.SUPABASE_ANON_KEY }}")
+          echo "Respuesta HTTP de Supabase: $STATUS"
+          if [ "$STATUS" -ne 200 ]; then
+            echo "Error: Supabase respondió con código $STATUS"
+            exit 1
+          fi
