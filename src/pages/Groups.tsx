@@ -17,6 +17,7 @@ import {
   X,
   SlidersHorizontal,
   BarChart3,
+  List,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -95,6 +96,9 @@ export function Groups({
   const [mySync, setMySync] = useState<SplitSyncSetting | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // Vista interna limpia: Actividad (Transacciones + Deudas) vs Gráficos
+  const [subView, setSubView] = useState<'activity' | 'charts'>('activity');
+
   // Crear nuevo grupo
   const [showNewGroup, setShowNewGroup] = useState(false);
   const [newGroupName, setNewGroupName] = useState('');
@@ -120,7 +124,7 @@ export function Groups({
   const [savingSync, setSavingSync] = useState(false);
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
 
-  // Filtro temporal del grupo (histórico completo vs mes concreto)
+  // Filtro temporal del grupo
   const now = new Date();
   const [periodScope, setPeriodScope] = useState<'all' | 'month'>('all');
   const [selectedYear, setSelectedYear] = useState(now.getFullYear());
@@ -279,7 +283,6 @@ export function Groups({
     };
   }, [balances]);
 
-  // Filtro de periodo (histórico o mes concreto)
   const selectedMonthKey = `${selectedYear}-${String(selectedMonth + 1).padStart(2, '0')}`;
 
   const activeMonthKeys = useMemo(
@@ -391,7 +394,7 @@ export function Groups({
   const displayedExpenses =
     showAllTx || periodScope === 'month'
       ? filteredExpenses
-      : filteredExpenses.slice(0, 4);
+      : filteredExpenses.slice(0, 5);
 
   const expenseCategoryNames = useMemo(
     () =>
@@ -551,8 +554,8 @@ export function Groups({
     } else if (syncEnabled) {
       setSyncMsg(
         expenses.length > 0
-          ? 'Conectado para futuros gastos. Si ya había gastos creados antes, pulsa "Sincronizar previos".'
-          : 'Conectado: tu parte de cada gasto nuevo entrará sola en ese perfil.'
+          ? 'Conectado para futuros gastos. Si ya había gastos previos, pulsa "Sincronizar previos".'
+          : 'Conectado: tu parte de cada gasto nuevo entrará sola en esa cuenta.'
       );
     } else {
       setSyncMsg('Sincronización desactivada para este grupo.');
@@ -594,10 +597,28 @@ export function Groups({
 
   return (
     <div className="space-y-5">
-      {/* ZONA HERO ESTILO SETTLE UP */}
+      {/* ZONA HERO ESTILO SETTLE UP (SIN SOLAPAMIENTOS Y CON COLORES CLAROS) */}
       {activeGroup ? (
         <div className="bg-slate-950 border border-slate-800/80 rounded-3xl overflow-hidden shadow-xl">
-          <div className="relative pt-6 pb-5 px-4 flex flex-col items-center justify-center bg-gradient-to-b from-slate-950 via-slate-950 to-slate-900/60">
+          <div className="relative pt-14 sm:pt-12 pb-6 px-4 bg-gradient-to-b from-slate-950 via-slate-950 to-slate-900/70">
+            {/* Estado de sincronización arriba izquierda */}
+            <button
+              type="button"
+              onClick={() => setShowGroupTools(true)}
+              title="Cambiar a qué cuenta financiera se envía tu parte"
+              className={`absolute top-4 left-4 flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-semibold border transition cursor-pointer ${
+                mySync?.sync_enabled && targetSyncWorkspace
+                  ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/20'
+                  : 'bg-slate-900/90 border-slate-800 text-slate-400 hover:text-white'
+              }`}
+            >
+              <Link2 className="w-3.5 h-3.5" />
+              {mySync?.sync_enabled && targetSyncWorkspace
+                ? `Sync → ${targetSyncWorkspace.name}`
+                : 'Sin sync'}
+            </button>
+
+            {/* Botón configuración del grupo arriba derecha */}
             <button
               type="button"
               onClick={() => setShowGroupTools((v) => !v)}
@@ -611,22 +632,8 @@ export function Groups({
               <span className="hidden sm:inline">Grupo y Sync</span>
             </button>
 
-            <button
-              type="button"
-              onClick={() => setShowGroupTools(true)}
-              className={`absolute top-4 left-4 flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-[11px] font-semibold border transition cursor-pointer ${
-                mySync?.sync_enabled && targetSyncWorkspace
-                  ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
-                  : 'bg-slate-900/90 border-slate-800 text-slate-400 hover:text-white'
-              }`}
-            >
-              <Link2 className="w-3.5 h-3.5" />
-              {mySync?.sync_enabled && targetSyncWorkspace
-                ? targetSyncWorkspace.name
-                : 'Sin sync'}
-            </button>
-
-            <div className="relative flex items-center justify-center mt-6 mb-2 min-h-[190px]">
+            {/* Burbujas de saldo */}
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-6 py-2">
               {allSettled || !heroBalances.primary ? (
                 <div className="w-44 h-44 sm:w-48 sm:h-48 rounded-full bg-emerald-600/90 shadow-2xl shadow-emerald-600/25 flex flex-col items-center justify-center text-center p-4 border border-emerald-400/30">
                   <CheckCircle2 className="w-8 h-8 text-emerald-100 mb-1" />
@@ -639,42 +646,63 @@ export function Groups({
                   </p>
                 </div>
               ) : (
-                <div className="relative flex items-center justify-center">
-                  <div className="w-48 h-48 sm:w-52 sm:h-52 rounded-full bg-emerald-600 shadow-2xl shadow-emerald-600/25 flex flex-col items-center justify-center text-center p-4 border border-emerald-400/25 z-10">
-                    <p className="text-lg font-medium text-emerald-50 truncate max-w-[150px]">
+                <>
+                  {/* Burbuja principal: quien tiene el mayor saldo negativo */}
+                  <div className="w-44 h-44 sm:w-48 sm:h-48 rounded-full bg-emerald-600 shadow-2xl shadow-emerald-600/25 flex flex-col items-center justify-center text-center p-4 border-2 border-emerald-400/30 shrink-0">
+                    <p className="text-base sm:text-lg font-medium text-emerald-50 truncate max-w-[140px]">
                       {heroBalances.primary.name}
                     </p>
                     <p className="text-3xl font-extrabold text-white tracking-tight mt-1">
                       {formatEUR(heroBalances.primary.netBalance)}
                     </p>
-                    <p className="text-xs font-medium text-emerald-100/85 mt-1.5">
+                    <p className="text-xs font-medium text-emerald-100/85 mt-1">
                       debe pagar
                     </p>
                   </div>
 
+                  {/* Resto de miembros en burbujas limpias sin solapamiento */}
                   {heroBalances.others.length > 0 && (
-                    <div className="flex flex-col gap-2 -ml-7 sm:-ml-6 z-20 self-end mb-1">
-                      {heroBalances.others.slice(0, 3).map((b) => (
-                        <div
-                          key={b.memberId}
-                          className="w-24 h-24 sm:w-28 sm:h-28 rounded-full bg-emerald-950/95 border-2 border-emerald-500/40 shadow-xl flex flex-col items-center justify-center text-center p-2"
-                        >
-                          <p className="text-xs sm:text-sm font-medium text-emerald-200 truncate max-w-[85px]">
-                            {b.name}
-                          </p>
-                          <p className="text-xs sm:text-sm font-bold text-white mt-0.5">
-                            {b.netBalance > 0 ? '+' : ''}
-                            {formatEUR(b.netBalance)}
-                          </p>
-                        </div>
-                      ))}
+                    <div className="flex flex-wrap items-center justify-center gap-3 max-w-md">
+                      {heroBalances.others.map((b) => {
+                        const isCreditor = b.netBalance > 0.01;
+                        const isDebtor = b.netBalance < -0.01;
+
+                        const bubbleStyle = isCreditor
+                          ? 'bg-emerald-950/90 border-emerald-500/50 text-emerald-300'
+                          : isDebtor
+                          ? 'bg-rose-950/60 border-rose-500/40 text-rose-300'
+                          : 'bg-slate-900 border-slate-700 text-slate-400';
+
+                        return (
+                          <div
+                            key={b.memberId}
+                            className={`w-24 h-24 sm:w-26 sm:h-26 rounded-full border-2 shadow-lg flex flex-col items-center justify-center text-center p-2 ${bubbleStyle}`}
+                          >
+                            <p className="text-xs font-medium text-white truncate max-w-[78px]">
+                              {b.name}
+                            </p>
+                            <p className="text-xs sm:text-sm font-extrabold mt-0.5">
+                              {b.netBalance > 0 ? '+' : ''}
+                              {formatEUR(b.netBalance)}
+                            </p>
+                            <p className="text-[10px] opacity-80 mt-0.5">
+                              {isCreditor
+                                ? 'recibe'
+                                : isDebtor
+                                ? 'debe'
+                                : 'en paz'}
+                            </p>
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
-                </div>
+                </>
               )}
             </div>
           </div>
 
+          {/* Pestañas horizontales de grupos */}
           <div className="flex items-center border-t border-slate-800/80 bg-slate-950 overflow-x-auto px-2">
             {groups.map((g) => {
               const active = g.id === activeGroupId;
@@ -685,7 +713,7 @@ export function Groups({
                   onClick={() => setActiveGroupId(g.id)}
                   className={`px-4 py-3.5 text-xs sm:text-sm font-bold uppercase tracking-wider whitespace-nowrap border-b-2 transition cursor-pointer ${
                     active
-                      ? 'border-white text-white'
+                      ? 'border-emerald-400 text-white'
                       : 'border-transparent text-slate-400 hover:text-slate-200'
                   }`}
                 >
@@ -713,7 +741,7 @@ export function Groups({
               Crea tu primer grupo de gastos compartidos
             </h3>
             <p className="text-xs text-slate-400 max-w-md mx-auto mt-1">
-              Lleva las cuentas como en Settle Up y sincroniza automáticamente solo tu parte con tu perfil financiero.
+              Lleva las cuentas como en Settle Up y sincroniza automáticamente solo tu parte con tu cuenta financiera.
             </p>
           </div>
           <button
@@ -790,7 +818,7 @@ export function Groups({
 
       {activeGroup && (
         <>
-          {/* PANEL DESPLEGABLE: SINCRONIZACIÓN, MIEMBROS (+ VINCULAR INVITADO), IMPORTAR Y BORRAR */}
+          {/* PANEL DESPLEGABLE: CONFIGURACIÓN, SYNC, MIEMBROS E IMPORTACIÓN */}
           {showGroupTools && (
             <div className="bg-slate-900 border border-emerald-500/30 rounded-2xl p-5 space-y-5">
               <div className="flex items-center justify-between">
@@ -806,14 +834,13 @@ export function Groups({
                 </button>
               </div>
 
-              {/* 1. Conexión privada con Finanzas */}
               <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-3">
                 <div>
                   <p className="text-xs font-bold text-emerald-400 flex items-center gap-1.5">
                     <Link2 className="w-4 h-4" /> Tu conexión privada con Finanzas
                   </p>
                   <p className="text-[11px] text-slate-400 mt-0.5">
-                    Solo afecta a tu usuario: únicamente <strong>tu parte</strong> de cada gasto irá al perfil que elijas.
+                    Elige a qué cuenta (ej. <strong>JAVI</strong> o <strong>CASA</strong>) se enviará únicamente <strong>tu parte</strong> de cada gasto de este grupo.
                   </p>
                 </div>
 
@@ -836,7 +863,7 @@ export function Groups({
                   >
                     {workspaces.map((w) => (
                       <option key={w.id} value={w.id}>
-                        Perfil: {w.name}
+                        Cuenta: {w.name}
                       </option>
                     ))}
                   </select>
@@ -865,7 +892,6 @@ export function Groups({
                 {syncMsg && <p className="text-xs text-emerald-300">{syncMsg}</p>}
               </div>
 
-              {/* 2. Miembros + Vincular invitado a cuenta real */}
               <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-3">
                 <p className="text-xs font-bold text-sky-400 flex items-center gap-1.5">
                   <UserPlus className="w-4 h-4" /> Miembros ({members.length})
@@ -900,7 +926,6 @@ export function Groups({
                         </span>
                       </div>
 
-                      {/* Botón para vincular un invitado existente a su cuenta real */}
                       {!m.user_id && isOwner && (
                         linkingMemberId === m.id ? (
                           <form
@@ -985,7 +1010,6 @@ export function Groups({
                 )}
               </div>
 
-              {/* 3. Importar Settle Up y Borrar grupo */}
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <button
                   type="button"
@@ -1010,47 +1034,78 @@ export function Groups({
             </div>
           )}
 
-          {/* SELECTOR DE PERIODO DENTRO DEL GRUPO (HISTÓRICO VS POR MES) */}
+          {/* BARRA UNIFICADA: ACTIVIDAD / GRÁFICOS + FILTRO DE PERIODO */}
           <div className="space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
+              {/* Selector de vista dentro del grupo */}
               <div className="inline-flex bg-slate-900 border border-slate-800 rounded-xl p-1">
                 <button
                   type="button"
-                  onClick={() => setPeriodScope('all')}
-                  className={`px-3.5 py-1.5 text-xs font-semibold rounded-lg transition cursor-pointer ${
-                    periodScope === 'all'
+                  onClick={() => setSubView('activity')}
+                  className={`flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold rounded-lg transition cursor-pointer ${
+                    subView === 'activity'
                       ? 'bg-emerald-500 text-slate-950'
                       : 'text-slate-400 hover:text-white'
                   }`}
                 >
-                  Todo el histórico
+                  <List className="w-3.5 h-3.5" />
+                  Actividad
                 </button>
                 <button
                   type="button"
-                  onClick={() => setPeriodScope('month')}
-                  className={`px-3.5 py-1.5 text-xs font-semibold rounded-lg transition cursor-pointer ${
-                    periodScope === 'month'
+                  onClick={() => setSubView('charts')}
+                  className={`flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold rounded-lg transition cursor-pointer ${
+                    subView === 'charts'
                       ? 'bg-emerald-500 text-slate-950'
                       : 'text-slate-400 hover:text-white'
                   }`}
                 >
-                  Filtrar por mes
+                  <BarChart3 className="w-3.5 h-3.5" />
+                  Gráficos
                 </button>
               </div>
 
-              <div className="flex items-center gap-3 text-xs">
-                <span className="text-slate-400">
-                  {periodScope === 'month' ? 'Gasto del mes:' : 'Total grupo:'}{' '}
-                  <strong className="text-white">
-                    {formatEUR(totalScopedSpent)}
-                  </strong>
-                </span>
-                <span className="text-slate-400 hidden sm:inline">
-                  Tu parte:{' '}
-                  <strong className="text-sky-400">
-                    {formatEUR(myScopedBalanceRow?.consumed ?? 0)}
-                  </strong>
-                </span>
+              {/* Filtro de periodo compacto + totales */}
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="inline-flex bg-slate-900 border border-slate-800 rounded-xl p-1 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setPeriodScope('all')}
+                    className={`px-2.5 py-1 font-semibold rounded-lg transition cursor-pointer ${
+                      periodScope === 'all'
+                        ? 'bg-slate-800 text-white'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Todo
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPeriodScope('month')}
+                    className={`px-2.5 py-1 font-semibold rounded-lg transition cursor-pointer ${
+                      periodScope === 'month'
+                        ? 'bg-slate-800 text-white'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Por mes
+                  </button>
+                </div>
+
+                <div className="text-xs text-slate-400 hidden sm:flex items-center gap-3">
+                  <span>
+                    Total:{' '}
+                    <strong className="text-white">
+                      {formatEUR(totalScopedSpent)}
+                    </strong>
+                  </span>
+                  <span>
+                    Tu parte:{' '}
+                    <strong className="text-sky-400">
+                      {formatEUR(myScopedBalanceRow?.consumed ?? 0)}
+                    </strong>
+                  </span>
+                </div>
               </div>
             </div>
 
@@ -1067,480 +1122,491 @@ export function Groups({
             )}
           </div>
 
-          {/* TRANSACCIONES */}
-          <section className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
-            <div className="flex flex-wrap items-center justify-between gap-2 px-5 py-3.5 border-b border-slate-800/80">
-              <h3 className="text-sm font-semibold text-slate-300">
-                Transacciones{' '}
-                <span className="text-xs font-normal text-slate-500">
-                  ({periodLabel})
-                </span>
-              </h3>
+          {/* =============================================================== */}
+          {/* SUB-VISTA 1: ACTIVIDAD (TRANSACCIONES + DEUDAS)                 */}
+          {/* =============================================================== */}
+          {subView === 'activity' ? (
+            <div className="space-y-5">
+              {/* TRANSACCIONES */}
+              <section className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+                <div className="flex flex-wrap items-center justify-between gap-2 px-5 py-3.5 border-b border-slate-800/80">
+                  <h3 className="text-sm font-semibold text-slate-300">
+                    Transacciones{' '}
+                    <span className="text-xs font-normal text-slate-500">
+                      ({periodLabel})
+                    </span>
+                  </h3>
 
-              <div className="flex items-center gap-2">
-                {(showAllTx || periodScope === 'month') && (
-                  <div className="relative">
-                    <Search className="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-1/2 -translate-y-1/2" />
-                    <input
-                      type="text"
-                      value={search}
-                      onChange={(e) => setSearch(e.target.value)}
-                      placeholder="Buscar..."
-                      className="bg-slate-950 border border-slate-800 rounded-lg pl-8 pr-2.5 py-1 text-xs text-white focus:outline-none focus:border-emerald-500 w-36 sm:w-52"
-                    />
+                  {(showAllTx || periodScope === 'month' || filteredExpenses.length > 0) && (
+                    <div className="relative">
+                      <Search className="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                      <input
+                        type="text"
+                        value={search}
+                        onChange={(e) => setSearch(e.target.value)}
+                        placeholder="Buscar..."
+                        className="bg-slate-950 border border-slate-800 rounded-lg pl-8 pr-2.5 py-1 text-xs text-white focus:outline-none focus:border-emerald-500 w-36 sm:w-52"
+                      />
+                    </div>
+                  )}
+                </div>
+
+                {displayedExpenses.length === 0 ? (
+                  <div className="p-8 text-center text-sm text-slate-400">
+                    {periodScope === 'month'
+                      ? `No hay movimientos registrados en ${periodLabel}.`
+                      : 'No hay transacciones todavía. Pulsa "+ Gasto grupo" para añadir el primer gasto.'}
+                  </div>
+                ) : (
+                  <div className="divide-y divide-slate-800/70">
+                    {displayedExpenses.map((exp) => {
+                      const payer = memberMap.get(exp.paid_by_member_id);
+                      const payerName = payer?.display_name ?? '?';
+                      const payerColor =
+                        memberColorMap.get(exp.paid_by_member_id) ?? '#10B981';
+                      const isSettlement = exp.type === 'settlement';
+                      const shares = exp.split_expense_shares ?? [];
+                      const myShare = myMember
+                        ? shares.find((s) => s.member_id === myMember.id)
+                            ?.share_amount ?? 0
+                        : 0;
+
+                      const rowCatOptions = quickCategoryOptions.includes(
+                        exp.category_name
+                      )
+                        ? quickCategoryOptions
+                        : [exp.category_name, ...quickCategoryOptions];
+
+                      return (
+                        <div
+                          key={exp.id}
+                          className="flex items-center justify-between gap-3 px-4 sm:px-5 py-3.5 hover:bg-slate-800/40 transition"
+                        >
+                          <div className="flex items-center gap-3.5 min-w-0">
+                            <div
+                              className="w-11 h-11 rounded-full flex items-center justify-center text-base font-bold text-white shrink-0 shadow-md"
+                              style={{ backgroundColor: payerColor }}
+                            >
+                              {payerName.charAt(0).toUpperCase()}
+                            </div>
+
+                            <div className="min-w-0">
+                              <p className="text-sm sm:text-base font-semibold text-white truncate">
+                                {exp.description || exp.category_name}
+                              </p>
+                              <div className="flex flex-wrap items-center gap-1.5 text-xs text-slate-400 mt-0.5">
+                                <span>{formatRelativeDateES(exp.expense_date)}</span>
+                                {!isSettlement && (
+                                  <>
+                                    <span>·</span>
+                                    <select
+                                      aria-label="Cambiar categoría del gasto"
+                                      disabled={updatingCatExpId === exp.id}
+                                      value={exp.category_name}
+                                      onChange={(e) =>
+                                        handleQuickCategoryChange(exp.id, e.target.value)
+                                      }
+                                      className="bg-slate-950/90 hover:bg-slate-800 border border-slate-800 rounded-lg px-2 py-0.5 text-[11px] font-medium text-slate-200 focus:outline-none focus:border-emerald-500 cursor-pointer disabled:opacity-50"
+                                    >
+                                      {rowCatOptions.map((catName) => (
+                                        <option key={catName} value={catName}>
+                                          {catName}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </>
+                                )}
+                              </div>
+                              <p className="text-xs text-slate-400 mt-0.5">
+                                {isSettlement ? (
+                                  <span className="text-sky-400 font-medium">
+                                    {payerName} saldó deuda
+                                  </span>
+                                ) : (
+                                  <>
+                                    {payerName} pagó por
+                                    {myShare > 0 && (
+                                      <span className="text-sky-400 ml-1.5 font-medium">
+                                        (Tu parte: {formatEUR(Number(myShare))})
+                                      </span>
+                                    )}
+                                  </>
+                                )}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2 shrink-0">
+                            <div className="flex flex-col items-end gap-1.5">
+                              <span
+                                className={`text-sm sm:text-base font-bold ${
+                                  isSettlement ? 'text-sky-400' : 'text-orange-300'
+                                }`}
+                              >
+                                {formatEUR(Number(exp.total_amount))}
+                              </span>
+
+                              <div className="flex items-center -space-x-1.5">
+                                {shares.map((s) => {
+                                  const mem = memberMap.get(s.member_id);
+                                  const col =
+                                    memberColorMap.get(s.member_id) ?? '#64748B';
+                                  return (
+                                    <span
+                                      key={s.member_id}
+                                      title={`${mem?.display_name ?? '?'}: ${formatEUR(Number(s.share_amount))}`}
+                                      className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold text-white ring-2 ring-slate-900"
+                                      style={{ backgroundColor: col }}
+                                    >
+                                      {(mem?.display_name ?? '?')
+                                        .charAt(0)
+                                        .toUpperCase()}
+                                    </span>
+                                  );
+                                })}
+                              </div>
+                            </div>
+
+                            <div className="flex flex-col sm:flex-row items-center gap-0.5 ml-1">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setPrefillSettlement(null);
+                                  setEditingExpense(exp);
+                                  setExpenseModalOpen(true);
+                                }}
+                                className="p-1.5 text-slate-500 hover:text-white rounded-lg cursor-pointer"
+                                title="Editar"
+                              >
+                                <Pencil className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteExpense(exp.id)}
+                                className="p-1.5 text-slate-500 hover:text-rose-400 rounded-lg cursor-pointer"
+                                title="Eliminar"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setEditingExpense(null);
-                    setPrefillSettlement(null);
-                    setExpenseModalOpen(true);
-                  }}
-                  className="hidden sm:flex items-center gap-1 px-3 py-1.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold text-xs rounded-lg cursor-pointer"
-                >
-                  <Plus className="w-3.5 h-3.5" /> Nuevo gasto
-                </button>
-              </div>
-            </div>
 
-            {displayedExpenses.length === 0 ? (
-              <div className="p-8 text-center text-sm text-slate-400">
-                {periodScope === 'month'
-                  ? `No hay movimientos registrados en ${periodLabel}.`
-                  : 'No hay transacciones todavía. Pulsa el botón verde + para añadir el primer gasto.'}
-              </div>
-            ) : (
-              <div className="divide-y divide-slate-800/70">
-                {displayedExpenses.map((exp) => {
-                  const payer = memberMap.get(exp.paid_by_member_id);
-                  const payerName = payer?.display_name ?? '?';
-                  const payerColor =
-                    memberColorMap.get(exp.paid_by_member_id) ?? '#10B981';
-                  const isSettlement = exp.type === 'settlement';
-                  const shares = exp.split_expense_shares ?? [];
-                  const myShare = myMember
-                    ? shares.find((s) => s.member_id === myMember.id)
-                        ?.share_amount ?? 0
-                    : 0;
+                {periodScope === 'all' && filteredExpenses.length > 5 && (
+                  <button
+                    type="button"
+                    onClick={() => setShowAllTx((v) => !v)}
+                    className="w-full py-3.5 text-center text-xs font-bold uppercase tracking-wider text-emerald-400 hover:bg-slate-800/60 border-t border-slate-800/80 transition cursor-pointer"
+                  >
+                    {showAllTx
+                      ? 'Mostrar menos'
+                      : `Mostrar todo (${filteredExpenses.length})`}
+                  </button>
+                )}
+              </section>
 
-                  const rowCatOptions = quickCategoryOptions.includes(
-                    exp.category_name
-                  )
-                    ? quickCategoryOptions
-                    : [exp.category_name, ...quickCategoryOptions];
+              {/* DEUDAS ACTUALES */}
+              <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-semibold text-slate-300">
+                    Deudas actuales
+                  </h3>
+                  <span className="text-[11px] text-slate-500">
+                    Balance acumulado real
+                  </span>
+                </div>
 
-                  return (
-                    <div
-                      key={exp.id}
-                      className="flex items-center justify-between gap-3 px-4 sm:px-5 py-3.5 hover:bg-slate-800/40 transition"
-                    >
-                      <div className="flex items-center gap-3.5 min-w-0">
+                {debts.length === 0 ? (
+                  <div className="flex items-center gap-2.5 text-sm text-emerald-400 font-medium">
+                    <CheckCircle2 className="w-5 h-5" />
+                    No hay ninguna deuda pendiente en este grupo.
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {debts.map((d, idx) => {
+                      const fromColor =
+                        memberColorMap.get(d.fromMemberId) ?? '#10B981';
+                      const toColor = memberColorMap.get(d.toMemberId) ?? '#6366F1';
+                      return (
                         <div
-                          className="w-11 h-11 rounded-full flex items-center justify-center text-base font-bold text-white shrink-0 shadow-md"
-                          style={{ backgroundColor: payerColor }}
+                          key={`${d.fromMemberId}-${d.toMemberId}-${idx}`}
+                          className="flex flex-wrap items-center justify-between gap-3 bg-slate-950/70 border border-slate-800 rounded-2xl p-3.5"
                         >
-                          {payerName.charAt(0).toUpperCase()}
-                        </div>
+                          <div className="flex items-center gap-3 flex-1 min-w-[210px] justify-between sm:justify-start sm:gap-6">
+                            <div className="flex items-center gap-2.5">
+                              <div
+                                className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold text-white shrink-0"
+                                style={{ backgroundColor: fromColor }}
+                              >
+                                {d.fromName.charAt(0).toUpperCase()}
+                              </div>
+                              <div>
+                                <p className="text-sm font-semibold text-white">
+                                  {d.fromName}
+                                </p>
+                                <p className="text-xs font-bold text-orange-300">
+                                  {formatEUR(d.amount)}
+                                </p>
+                              </div>
+                            </div>
 
-                        <div className="min-w-0">
-                          <p className="text-sm sm:text-base font-semibold text-white truncate">
-                            {exp.description || exp.category_name}
-                          </p>
-                          <div className="flex flex-wrap items-center gap-1.5 text-xs text-slate-400 mt-0.5">
-                            <span>{formatRelativeDateES(exp.expense_date)}</span>
-                            {!isSettlement && (
-                              <>
-                                <span>·</span>
-                                {/* Selector rápido de categoría en 1 toque */}
-                                <select
-                                  aria-label="Cambiar categoría del gasto"
-                                  disabled={updatingCatExpId === exp.id}
-                                  value={exp.category_name}
-                                  onChange={(e) =>
-                                    handleQuickCategoryChange(exp.id, e.target.value)
-                                  }
-                                  className="bg-slate-950/90 hover:bg-slate-800 border border-slate-800 rounded-lg px-2 py-0.5 text-[11px] font-medium text-slate-200 focus:outline-none focus:border-emerald-500 cursor-pointer disabled:opacity-50"
-                                >
-                                  {rowCatOptions.map((catName) => (
-                                    <option key={catName} value={catName}>
-                                      {catName}
-                                    </option>
-                                  ))}
-                                </select>
-                              </>
-                            )}
+                            <div className="w-8 h-8 rounded-full bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0">
+                              <ArrowRight className="w-4 h-4" />
+                            </div>
+
+                            <div className="flex items-center gap-2.5">
+                              <p className="text-sm font-semibold text-white">
+                                {d.toName}
+                              </p>
+                              <div
+                                className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold text-white shrink-0"
+                                style={{ backgroundColor: toColor }}
+                              >
+                                {d.toName.charAt(0).toUpperCase()}
+                              </div>
+                            </div>
                           </div>
-                          <p className="text-xs text-slate-400 mt-0.5">
-                            {isSettlement ? (
-                              <span className="text-sky-400 font-medium">
-                                {payerName} saldó deuda
-                              </span>
-                            ) : (
-                              <>
-                                {payerName} pagó por
-                                {myShare > 0 && (
-                                  <span className="text-sky-400 ml-1.5 font-medium">
-                                    (Tu parte: {formatEUR(Number(myShare))})
-                                  </span>
-                                )}
-                              </>
-                            )}
-                          </p>
-                        </div>
-                      </div>
 
-                      <div className="flex items-center gap-2 shrink-0">
-                        <div className="flex flex-col items-end gap-1.5">
-                          <span
-                            className={`text-sm sm:text-base font-bold ${
-                              isSettlement ? 'text-sky-400' : 'text-orange-300'
-                            }`}
-                          >
-                            {formatEUR(Number(exp.total_amount))}
-                          </span>
-
-                          <div className="flex items-center -space-x-1.5">
-                            {shares.map((s) => {
-                              const mem = memberMap.get(s.member_id);
-                              const col =
-                                memberColorMap.get(s.member_id) ?? '#64748B';
-                              return (
-                                <span
-                                  key={s.member_id}
-                                  title={`${mem?.display_name ?? '?'}: ${formatEUR(Number(s.share_amount))}`}
-                                  className="w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-bold text-white ring-2 ring-slate-900"
-                                  style={{ backgroundColor: col }}
-                                >
-                                  {(mem?.display_name ?? '?')
-                                    .charAt(0)
-                                    .toUpperCase()}
-                                </span>
-                              );
-                            })}
-                          </div>
-                        </div>
-
-                        <div className="flex flex-col sm:flex-row items-center gap-0.5 ml-1">
                           <button
                             type="button"
                             onClick={() => {
-                              setPrefillSettlement(null);
-                              setEditingExpense(exp);
+                              setEditingExpense(null);
+                              setPrefillSettlement({
+                                fromMemberId: d.fromMemberId,
+                                toMemberId: d.toMemberId,
+                                amount: d.amount,
+                              });
                               setExpenseModalOpen(true);
                             }}
-                            className="p-1.5 text-slate-500 hover:text-white rounded-lg cursor-pointer"
-                            title="Editar"
+                            className="flex items-center gap-1.5 px-3.5 py-2 bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-300 font-semibold text-xs rounded-xl cursor-pointer"
                           >
-                            <Pencil className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteExpense(exp.id)}
-                            className="p-1.5 text-slate-500 hover:text-rose-400 rounded-lg cursor-pointer"
-                            title="Eliminar"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
+                            <Handshake className="w-4 h-4" />
+                            Saldar
                           </button>
                         </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-
-            {periodScope === 'all' && filteredExpenses.length > 4 && (
-              <button
-                type="button"
-                onClick={() => setShowAllTx((v) => !v)}
-                className="w-full py-3.5 text-center text-xs font-bold uppercase tracking-wider text-emerald-400 hover:bg-slate-800/60 border-t border-slate-800/80 transition cursor-pointer"
-              >
-                {showAllTx
-                  ? 'Mostrar menos'
-                  : `Mostrar todo (${filteredExpenses.length})`}
-              </button>
-            )}
-          </section>
-
-          {/* DEUDAS (SIEMPRE ACUMULADO REAL DEL GRUPO) */}
-          <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-slate-300">
-                Deudas actuales
-              </h3>
-              <span className="text-[11px] text-slate-500">
-                Balance acumulado real
-              </span>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
             </div>
+          ) : (
+            /* =============================================================== */
+            /* SUB-VISTA 2: GRÁFICOS Y ANÁLISIS DETALLADO                      */
+            /* =============================================================== */
+            <section className="space-y-4">
+              {!expenses.some((e) => e.type === 'expense') ? (
+                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-10 text-center text-sm text-slate-400">
+                  Añade algún gasto en este grupo para ver los gráficos.
+                </div>
+              ) : (
+                <>
+                  {/* KPIs rápidos del periodo en móvil y escritorio */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+                      <p className="text-xs text-slate-400">
+                        Total grupo ({periodLabel})
+                      </p>
+                      <p className="text-xl sm:text-2xl font-bold text-white mt-1">
+                        {formatEUR(totalScopedSpent)}
+                      </p>
+                    </div>
+                    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+                      <p className="text-xs text-slate-400">
+                        Tu consumo real ({periodLabel})
+                      </p>
+                      <p className="text-xl sm:text-2xl font-bold text-sky-400 mt-1">
+                        {formatEUR(myScopedBalanceRow?.consumed ?? 0)}
+                      </p>
+                    </div>
+                  </div>
 
-            {debts.length === 0 ? (
-              <div className="flex items-center gap-2.5 text-sm text-emerald-400 font-medium">
-                <CheckCircle2 className="w-5 h-5" />
-                No hay ninguna deuda pendiente en este grupo.
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {debts.map((d, idx) => {
-                  const fromColor =
-                    memberColorMap.get(d.fromMemberId) ?? '#10B981';
-                  const toColor = memberColorMap.get(d.toMemberId) ?? '#6366F1';
-                  return (
-                    <div
-                      key={`${d.fromMemberId}-${d.toMemberId}-${idx}`}
-                      className="flex flex-wrap items-center justify-between gap-3 bg-slate-950/70 border border-slate-800 rounded-2xl p-3.5"
-                    >
-                      <div className="flex items-center gap-3 flex-1 min-w-[210px] justify-between sm:justify-start sm:gap-6">
-                        <div className="flex items-center gap-2.5">
-                          <div
-                            className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold text-white shrink-0"
-                            style={{ backgroundColor: fromColor }}
-                          >
-                            {d.fromName.charAt(0).toUpperCase()}
-                          </div>
-                          <div>
-                            <p className="text-sm font-semibold text-white">
-                              {d.fromName}
-                            </p>
-                            <p className="text-xs font-bold text-orange-300">
-                              {formatEUR(d.amount)}
-                            </p>
-                          </div>
-                        </div>
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
+                      <h4 className="text-sm font-semibold text-white mb-1">
+                        Pagado vs Consumo real ({periodLabel})
+                      </h4>
+                      <p className="text-[11px] text-slate-400 mb-4">
+                        Cuánto ha adelantado cada uno frente a lo que realmente ha consumido.
+                      </p>
+                      <div className="h-56">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <BarChart data={memberComparisonChart}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                            <XAxis dataKey="name" stroke="#94a3b8" fontSize={12} />
+                            <YAxis stroke="#94a3b8" fontSize={12} />
+                            <Tooltip
+                              contentStyle={{
+                                backgroundColor: '#0f172a',
+                                borderColor: '#334155',
+                                borderRadius: '12px',
+                                fontSize: '12px',
+                              }}
+                              formatter={(value) => formatEUR(Number(value ?? 0))}
+                            />
+                            <Legend wrapperStyle={{ fontSize: '12px', paddingTop: '6px' }} />
+                            <Bar
+                              dataKey="pagado"
+                              name="Pagado"
+                              fill="#10b981"
+                              radius={[6, 6, 0, 0]}
+                            />
+                            <Bar
+                              dataKey="consumo"
+                              name="Consumo real"
+                              fill="#6366f1"
+                              radius={[6, 6, 0, 0]}
+                            />
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
 
-                        <div className="w-8 h-8 rounded-full bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0">
-                          <ArrowRight className="w-4 h-4" />
-                        </div>
-
-                        <div className="flex items-center gap-2.5">
-                          <p className="text-sm font-semibold text-white">
-                            {d.toName}
-                          </p>
-                          <div
-                            className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold text-white shrink-0"
-                            style={{ backgroundColor: toColor }}
-                          >
-                            {d.toName.charAt(0).toUpperCase()}
-                          </div>
+                    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
+                      <div className="flex items-center justify-between gap-2 mb-1">
+                        <h4 className="text-sm font-semibold text-white">
+                          Evolución mensual: Grupo vs Tu parte
+                        </h4>
+                        <div className="inline-flex bg-slate-950 border border-slate-800 rounded-lg p-0.5 text-[11px]">
+                          {([6, 12] as const).map((m) => (
+                            <button
+                              key={m}
+                              type="button"
+                              onClick={() => setChartMonths(m)}
+                              className={`px-2 py-0.5 rounded-md font-semibold cursor-pointer ${
+                                chartMonths === m
+                                  ? 'bg-emerald-500 text-slate-950'
+                                  : 'text-slate-400 hover:text-white'
+                              }`}
+                            >
+                              {m}M
+                            </button>
+                          ))}
                         </div>
                       </div>
-
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setEditingExpense(null);
-                          setPrefillSettlement({
-                            fromMemberId: d.fromMemberId,
-                            toMemberId: d.toMemberId,
-                            amount: d.amount,
-                          });
-                          setExpenseModalOpen(true);
-                        }}
-                        className="flex items-center gap-1.5 px-3.5 py-2 bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-300 font-semibold text-xs rounded-xl cursor-pointer"
-                      >
-                        <Handshake className="w-4 h-4" />
-                        Saldar
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </section>
-
-          {/* 3 GRÁFICOS DETALLADOS */}
-          {expenses.some((e) => e.type === 'expense') && (
-            <section className="space-y-4">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                  <BarChart3 className="w-4 h-4 text-emerald-400" />
-                  Análisis de {activeGroup.name}{' '}
-                  <span className="text-xs font-normal text-slate-400">
-                    ({periodLabel})
-                  </span>
-                </h3>
-              </div>
-
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
-                  <h4 className="text-sm font-semibold text-white mb-1">
-                    Pagado vs Consumo real ({periodLabel})
-                  </h4>
-                  <p className="text-[11px] text-slate-400 mb-4">
-                    Cuánto ha adelantado cada uno frente a lo que realmente ha consumido.
-                  </p>
-                  <div className="h-56">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={memberComparisonChart}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                        <XAxis dataKey="name" stroke="#94a3b8" fontSize={12} />
-                        <YAxis stroke="#94a3b8" fontSize={12} />
-                        <Tooltip
-                          contentStyle={{
-                            backgroundColor: '#0f172a',
-                            borderColor: '#334155',
-                            borderRadius: '12px',
-                            fontSize: '12px',
-                          }}
-                          formatter={(value) => formatEUR(Number(value ?? 0))}
-                        />
-                        <Legend wrapperStyle={{ fontSize: '12px', paddingTop: '6px' }} />
-                        <Bar
-                          dataKey="pagado"
-                          name="Pagado"
-                          fill="#10b981"
-                          radius={[6, 6, 0, 0]}
-                        />
-                        <Bar
-                          dataKey="consumo"
-                          name="Consumo real"
-                          fill="#6366f1"
-                          radius={[6, 6, 0, 0]}
-                        />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
-                </div>
-
-                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
-                  <div className="flex items-center justify-between gap-2 mb-1">
-                    <h4 className="text-sm font-semibold text-white">
-                      Evolución mensual: Grupo vs Tu parte
-                    </h4>
-                    <div className="inline-flex bg-slate-950 border border-slate-800 rounded-lg p-0.5 text-[11px]">
-                      {([6, 12] as const).map((m) => (
-                        <button
-                          key={m}
-                          type="button"
-                          onClick={() => setChartMonths(m)}
-                          className={`px-2 py-0.5 rounded-md font-semibold cursor-pointer ${
-                            chartMonths === m
-                              ? 'bg-emerald-500 text-slate-950'
-                              : 'text-slate-400 hover:text-white'
-                          }`}
-                        >
-                          {m}M
-                        </button>
-                      ))}
+                      <p className="text-[11px] text-slate-400 mb-4">
+                        Gasto total del grupo cada mes frente a tu cuota real.
+                      </p>
+                      <div className="h-56">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <AreaChart data={monthlySeries}>
+                            <defs>
+                              <linearGradient id="grpTot" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="5%" stopColor="#6366f1" stopOpacity={0.3} />
+                                <stop offset="95%" stopColor="#6366f1" stopOpacity={0} />
+                              </linearGradient>
+                              <linearGradient id="grpMine" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="5%" stopColor="#0ea5e9" stopOpacity={0.35} />
+                                <stop offset="95%" stopColor="#0ea5e9" stopOpacity={0} />
+                              </linearGradient>
+                            </defs>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                            <XAxis dataKey="label" stroke="#94a3b8" fontSize={12} />
+                            <YAxis stroke="#94a3b8" fontSize={12} />
+                            <Tooltip
+                              contentStyle={{
+                                backgroundColor: '#0f172a',
+                                borderColor: '#334155',
+                                borderRadius: '12px',
+                                fontSize: '12px',
+                              }}
+                              formatter={(value) => formatEUR(Number(value ?? 0))}
+                            />
+                            <Legend wrapperStyle={{ fontSize: '12px', paddingTop: '6px' }} />
+                            <Area
+                              type="monotone"
+                              dataKey="totalGrupo"
+                              name="Total grupo"
+                              stroke="#6366f1"
+                              strokeWidth={2}
+                              fill="url(#grpTot)"
+                            />
+                            <Area
+                              type="monotone"
+                              dataKey="miParte"
+                              name="Tu parte real"
+                              stroke="#0ea5e9"
+                              strokeWidth={2.5}
+                              fill="url(#grpMine)"
+                            />
+                          </AreaChart>
+                        </ResponsiveContainer>
+                      </div>
                     </div>
                   </div>
-                  <p className="text-[11px] text-slate-400 mb-4">
-                    Gasto total del grupo cada mes frente a tu cuota real.
-                  </p>
-                  <div className="h-56">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <AreaChart data={monthlySeries}>
-                        <defs>
-                          <linearGradient id="grpTot" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="5%" stopColor="#6366f1" stopOpacity={0.3} />
-                            <stop offset="95%" stopColor="#6366f1" stopOpacity={0} />
-                          </linearGradient>
-                          <linearGradient id="grpMine" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="5%" stopColor="#0ea5e9" stopOpacity={0.35} />
-                            <stop offset="95%" stopColor="#0ea5e9" stopOpacity={0} />
-                          </linearGradient>
-                        </defs>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                        <XAxis dataKey="label" stroke="#94a3b8" fontSize={12} />
-                        <YAxis stroke="#94a3b8" fontSize={12} />
-                        <Tooltip
-                          contentStyle={{
-                            backgroundColor: '#0f172a',
-                            borderColor: '#334155',
-                            borderRadius: '12px',
-                            fontSize: '12px',
-                          }}
-                          formatter={(value) => formatEUR(Number(value ?? 0))}
-                        />
-                        <Legend wrapperStyle={{ fontSize: '12px', paddingTop: '6px' }} />
-                        <Area
-                          type="monotone"
-                          dataKey="totalGrupo"
-                          name="Total grupo"
-                          stroke="#6366f1"
-                          strokeWidth={2}
-                          fill="url(#grpTot)"
-                        />
-                        <Area
-                          type="monotone"
-                          dataKey="miParte"
-                          name="Tu parte real"
-                          stroke="#0ea5e9"
-                          strokeWidth={2.5}
-                          fill="url(#grpMine)"
-                        />
-                      </AreaChart>
-                    </ResponsiveContainer>
-                  </div>
-                </div>
-              </div>
 
-              {categoryChart.length > 0 && (
-                <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
-                  <h4 className="text-sm font-semibold text-white mb-4">
-                    Distribución por categorías ({periodLabel})
-                  </h4>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-center">
-                    <div className="h-52">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <PieChart>
-                          <Pie
-                            data={categoryChart}
-                            dataKey="amount"
-                            nameKey="name"
-                            innerRadius={52}
-                            outerRadius={82}
-                            paddingAngle={2}
-                          >
-                            {categoryChart.map((entry) => (
-                              <Cell key={entry.name} fill={entry.color} />
-                            ))}
-                          </Pie>
-                          <Tooltip
-                            contentStyle={{
-                              backgroundColor: '#0f172a',
-                              borderColor: '#334155',
-                              borderRadius: '12px',
-                              fontSize: '12px',
-                            }}
-                            formatter={(value) => formatEUR(Number(value ?? 0))}
-                          />
-                        </PieChart>
-                      </ResponsiveContainer>
-                    </div>
-
-                    <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
-                      {categoryChart.map((c) => {
-                        const pct =
-                          totalScopedSpent > 0
-                            ? (c.amount / totalScopedSpent) * 100
-                            : 0;
-                        return (
-                          <div
-                            key={c.name}
-                            className="flex items-center justify-between text-xs gap-2"
-                          >
-                            <div className="flex items-center gap-2 min-w-0">
-                              <span
-                                className="w-2.5 h-2.5 rounded-full shrink-0"
-                                style={{ backgroundColor: c.color }}
+                  {categoryChart.length > 0 && (
+                    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
+                      <h4 className="text-sm font-semibold text-white mb-4">
+                        Distribución por categorías ({periodLabel})
+                      </h4>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-center">
+                        <div className="h-52">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <PieChart>
+                              <Pie
+                                data={categoryChart}
+                                dataKey="amount"
+                                nameKey="name"
+                                innerRadius={52}
+                                outerRadius={82}
+                                paddingAngle={2}
+                              >
+                                {categoryChart.map((entry) => (
+                                  <Cell key={entry.name} fill={entry.color} />
+                                ))}
+                              </Pie>
+                              <Tooltip
+                                contentStyle={{
+                                  backgroundColor: '#0f172a',
+                                  borderColor: '#334155',
+                                  borderRadius: '12px',
+                                  fontSize: '12px',
+                                }}
+                                formatter={(value) => formatEUR(Number(value ?? 0))}
                               />
-                              <span className="text-slate-200 truncate">{c.name}</span>
-                            </div>
-                            <div className="shrink-0">
-                              <span className="font-semibold text-white">
-                                {formatEUR(c.amount)}
-                              </span>
-                              <span className="text-slate-500 ml-1.5">
-                                ({pct.toFixed(0)}%)
-                              </span>
-                            </div>
-                          </div>
-                        );
-                      })}
+                            </PieChart>
+                          </ResponsiveContainer>
+                        </div>
+
+                        <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+                          {categoryChart.map((c) => {
+                            const pct =
+                              totalScopedSpent > 0
+                                ? (c.amount / totalScopedSpent) * 100
+                                : 0;
+                            return (
+                              <div
+                                key={c.name}
+                                className="flex items-center justify-between text-xs gap-2"
+                              >
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <span
+                                    className="w-2.5 h-2.5 rounded-full shrink-0"
+                                    style={{ backgroundColor: c.color }}
+                                  />
+                                  <span className="text-slate-200 truncate">{c.name}</span>
+                                </div>
+                                <div className="shrink-0">
+                                  <span className="font-semibold text-white">
+                                    {formatEUR(c.amount)}
+                                  </span>
+                                  <span className="text-slate-500 ml-1.5">
+                                    ({pct.toFixed(0)}%)
+                                  </span>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                </div>
+                  )}
+                </>
               )}
             </section>
           )}

@@ -8,7 +8,6 @@ import {
   User,
   UserPlus,
   Save,
-  LogOut,
   Download,
   Check,
   X,
@@ -75,7 +74,7 @@ export function Settings({
   const [catBudget, setCatBudget] = useState('');
   const [savingCat, setSavingCat] = useState(false);
 
-  // Espacio actual
+  // Cuenta financiera actual
   const [wsName, setWsName] = useState(workspace.name);
   const [wsType, setWsType] = useState<'personal' | 'shared'>(workspace.type);
   const [wsInitialBalance, setWsInitialBalance] = useState(
@@ -83,19 +82,15 @@ export function Settings({
   );
   const [wsMsg, setWsMsg] = useState<string | null>(null);
 
-  // Crear nuevo espacio (Personal / Puntual o Compartido)
+  // Crear nueva cuenta
   const [newWsName, setNewWsName] = useState('');
   const [newWsType, setNewWsType] = useState<'personal' | 'shared'>('personal');
   const [creatingWs, setCreatingWs] = useState(false);
 
-  // Miembros
+  // Miembros de cuenta conjunta
   const [members, setMembers] = useState<MemberRow[]>([]);
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteMsg, setInviteMsg] = useState<string | null>(null);
-
-  // Perfil de usuario
-  const [fullName, setFullName] = useState(profile?.full_name ?? '');
-  const [profileMsg, setProfileMsg] = useState<string | null>(null);
 
   useEffect(() => {
     setWsName(workspace.name);
@@ -113,10 +108,6 @@ export function Settings({
     }
     loadMembers();
   }, [workspace]);
-
-  useEffect(() => {
-    if (profile) setFullName(profile.full_name);
-  }, [profile]);
 
   function startEditCat(c: Category) {
     setEditingCat(c);
@@ -182,7 +173,7 @@ export function Settings({
 
     if (wsType === 'personal' && members.length > 1) {
       setWsMsg(
-        'No puedes pasarlo a Personal mientras haya más de un miembro en este espacio.'
+        'No puedes pasarlo a Personal mientras haya más de un miembro en esta cuenta.'
       );
       return;
     }
@@ -202,24 +193,24 @@ export function Settings({
       return;
     }
 
-    setWsMsg('Perfil / espacio actualizado.');
+    setWsMsg('Cuenta actualizada.');
     onRefreshAll();
   }
 
   async function handleDeleteWorkspace(ws: Workspace) {
     if (workspaces.length <= 1) {
-      window.alert('Debes mantener al menos un espacio activo.');
+      window.alert('Debes mantener al menos una cuenta activa.');
       return;
     }
 
     const ok = window.confirm(
-      `¿Eliminar el perfil "${ws.name}"? Se borrarán TODOS sus movimientos, fijos, categorías y huchas de forma permanente.`
+      `¿Eliminar la cuenta "${ws.name}"? Se borrarán TODOS sus movimientos, fijos, categorías y huchas de forma permanente.`
     );
     if (!ok) return;
 
     const { error } = await supabase.from('workspaces').delete().eq('id', ws.id);
     if (error) {
-      window.alert('Solo el propietario puede eliminar este espacio: ' + error.message);
+      window.alert('Solo el propietario puede eliminar esta cuenta: ' + error.message);
       return;
     }
 
@@ -277,19 +268,6 @@ export function Settings({
     if (data) setMembers(data as unknown as MemberRow[]);
   }
 
-  async function handleSaveProfile(e: React.FormEvent) {
-    e.preventDefault();
-    if (!profile || !fullName.trim()) return;
-    const { error } = await supabase
-      .from('profiles')
-      .update({ full_name: fullName.trim() })
-      .eq('id', profile.id);
-    if (!error) {
-      setProfileMsg('Nombre actualizado.');
-      onRefreshAll();
-    }
-  }
-
   const visibleCats = categories.filter((c) => c.type === catTab);
   const isOwnerOfCurrent = workspace.created_by === profile?.id;
 
@@ -300,7 +278,7 @@ export function Settings({
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
             <h2 className="text-base font-bold text-white">
-              Categorías y presupuestos mensuales
+              Categorías y presupuestos mensuales ({workspace.name})
             </h2>
             <p className="text-xs text-slate-400">
               Personaliza nombres, iconos, colores y fija límites de gasto mensual.
@@ -333,7 +311,6 @@ export function Settings({
           </div>
         </div>
 
-        {/* Formulario categoría */}
         <form
           onSubmit={handleSaveCategory}
           className="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-4"
@@ -402,7 +379,6 @@ export function Settings({
           </div>
         </form>
 
-        {/* Lista categorías */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
           {visibleCats.map((c) => (
             <div
@@ -455,13 +431,13 @@ export function Settings({
         </div>
       </section>
 
-      {/* 2. GESTIÓN DE PERFILES / ESPACIOS (EDITAR, CREAR PUNTUALES, COMPARTIR Y BORRAR) */}
+      {/* 2. GESTIÓN DE CUENTAS FINANCIERAS */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
           <div className="flex items-center justify-between">
             <h2 className="text-base font-bold text-white flex items-center gap-2">
               <Wallet className="w-5 h-5 text-emerald-400" />
-              Editar perfil actual
+              Editar cuenta actual
             </h2>
             {isOwnerOfCurrent && workspaces.length > 1 && (
               <button
@@ -477,7 +453,7 @@ export function Settings({
           <form onSubmit={handleSaveWorkspace} className="space-y-3">
             <div>
               <label className="block text-xs text-slate-400 mb-1">
-                Nombre del perfil / cuenta
+                Nombre de la cuenta
               </label>
               <input
                 type="text"
@@ -489,7 +465,7 @@ export function Settings({
 
             <div>
               <label className="block text-xs text-slate-400 mb-1">
-                Tipo de perfil
+                Tipo de cuenta
               </label>
               <div className="grid grid-cols-2 gap-2 p-1 bg-slate-950 border border-slate-800 rounded-xl">
                 <button
@@ -512,7 +488,7 @@ export function Settings({
                       : 'text-slate-400 hover:text-white'
                   }`}
                 >
-                  <Users className="w-3.5 h-3.5" /> Compartido
+                  <Users className="w-3.5 h-3.5" /> Compartida
                 </button>
               </div>
             </div>
@@ -539,7 +515,6 @@ export function Settings({
             </button>
           </form>
 
-          {/* Miembros si es compartido */}
           {workspace.type === 'shared' && (
             <div className="pt-4 border-t border-slate-800 space-y-3">
               <p className="text-xs font-semibold text-sky-400">
@@ -582,11 +557,10 @@ export function Settings({
           )}
         </section>
 
-        {/* Todos tus perfiles + crear uno nuevo (personal puntual o cuenta conjunta) */}
         <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
           <h2 className="text-base font-bold text-white flex items-center gap-2">
             <Users className="w-5 h-5 text-sky-400" />
-            Todos tus perfiles y cuentas
+            Todas tus cuentas financieras
           </h2>
 
           <div className="space-y-2">
@@ -617,7 +591,7 @@ export function Settings({
                       </p>
                       <p className="text-[11px] text-slate-400">
                         {ws.type === 'shared' ? 'Cuenta Conjunta' : 'Personal / Puntual'}
-                        {active ? ' · Activo' : ''}
+                        {active ? ' · Activa' : ''}
                       </p>
                     </div>
                   </button>
@@ -627,7 +601,7 @@ export function Settings({
                       type="button"
                       onClick={() => handleDeleteWorkspace(ws)}
                       className="p-1.5 text-slate-500 hover:text-rose-400 rounded-lg cursor-pointer"
-                      title="Eliminar perfil"
+                      title="Eliminar cuenta"
                     >
                       <Trash2 className="w-4 h-4" />
                     </button>
@@ -639,7 +613,7 @@ export function Settings({
 
           <div className="pt-3 border-t border-slate-800 space-y-2.5">
             <p className="text-xs font-semibold text-slate-300">
-              Crear nuevo perfil (cuenta conjunta o proyecto puntual)
+              Crear nueva cuenta (conjunta o proyecto puntual)
             </p>
             <form onSubmit={handleCreateWorkspace} className="space-y-2.5">
               <div className="grid grid-cols-2 gap-2 p-1 bg-slate-950 border border-slate-800 rounded-xl">
@@ -692,50 +666,27 @@ export function Settings({
         </section>
       </div>
 
-      {/* 3. PERFIL DE USUARIO, BACKUP Y SESIÓN */}
-      <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5 flex flex-col sm:flex-row sm:items-end justify-between gap-4">
-        <form onSubmit={handleSaveProfile} className="flex-1 space-y-2 max-w-sm">
-          <label className="block text-xs text-slate-400">
-            Tu nombre visible ({profile?.email})
-          </label>
-          <div className="flex gap-2">
-            <input
-              type="text"
-              value={fullName}
-              onChange={(e) => setFullName(e.target.value)}
-              className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-emerald-500"
-            />
-            <button
-              type="submit"
-              className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold rounded-xl cursor-pointer"
-            >
-              Guardar
-            </button>
-          </div>
-          {profileMsg && <p className="text-xs text-emerald-400">{profileMsg}</p>}
-        </form>
-
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={() =>
-              exportTransactionsToCSV(transactions, categories, workspace.name)
-            }
-            className="flex items-center gap-1.5 px-3.5 py-2.5 bg-slate-950 hover:bg-slate-800 border border-slate-700 text-xs font-semibold text-slate-200 rounded-xl cursor-pointer"
-          >
-            <Download className="w-4 h-4 text-emerald-400" />
-            Backup CSV completo
-          </button>
-
-          <button
-            type="button"
-            onClick={() => supabase.auth.signOut()}
-            className="flex items-center gap-1.5 px-3.5 py-2.5 bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/30 text-xs font-semibold text-rose-300 rounded-xl cursor-pointer"
-          >
-            <LogOut className="w-4 h-4" />
-            Cerrar sesión
-          </button>
+      {/* 3. COPIA DE SEGURIDAD */}
+      <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h3 className="text-sm font-bold text-white">
+            Copia de seguridad de "{workspace.name}"
+          </h3>
+          <p className="text-xs text-slate-400 mt-0.5">
+            Descarga todos los movimientos en CSV compatible con Excel. Para cambiar tu nombre, contraseña o cerrar sesión usa tu botón de <strong className="text-slate-200">Perfil</strong> arriba a la derecha.
+          </p>
         </div>
+
+        <button
+          type="button"
+          onClick={() =>
+            exportTransactionsToCSV(transactions, categories, workspace.name)
+          }
+          className="flex items-center justify-center gap-1.5 px-4 py-2.5 bg-slate-950 hover:bg-slate-800 border border-slate-700 text-xs font-semibold text-slate-200 rounded-xl cursor-pointer shrink-0"
+        >
+          <Download className="w-4 h-4 text-emerald-400" />
+          Exportar CSV completo ({transactions.length})
+        </button>
       </section>
     </div>
   );

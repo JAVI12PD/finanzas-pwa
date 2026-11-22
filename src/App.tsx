@@ -59,7 +59,6 @@ export default function App() {
   const now = new Date();
   const [selectedYear, setSelectedYear] = useState(now.getFullYear());
   const [selectedMonth, setSelectedMonth] = useState(now.getMonth());
-  // Pantalla principal: Grupos (estilo Settle Up)
   const [activeTab, setActiveTab] = useState<Tab>('groups');
 
   const [modalOpen, setModalOpen] = useState(false);
@@ -224,6 +223,10 @@ export default function App() {
     { id: 'settings', label: 'Ajustes', mobileLabel: 'Ajustes', icon: SettingsIcon },
   ];
 
+  // El selector de cuenta (JAVI / CASA) solo tiene sentido en las pestañas de Finanzas
+  const showWorkspaceSelector =
+    activeTab !== 'groups' && activeTab !== 'profile' && workspaces.length > 0;
+
   const userInitial = (profile?.full_name || profile?.email || 'U')
     .trim()
     .charAt(0)
@@ -234,7 +237,7 @@ export default function App() {
       {/* Barra superior */}
       <header className="sticky top-0 z-30 bg-slate-950/90 backdrop-blur-md border-b border-slate-800/80">
         <div className="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2 min-w-0">
+          <div className="flex items-center gap-2.5 min-w-0">
             <button
               type="button"
               onClick={goHome}
@@ -244,7 +247,7 @@ export default function App() {
               <Wallet className="w-5 h-5 text-emerald-400" />
             </button>
 
-            {workspaces.length > 0 && (
+            {showWorkspaceSelector ? (
               <div className="relative flex items-center">
                 <span className="pointer-events-none absolute left-3 flex items-center">
                   {activeWorkspace?.type === 'shared' ? (
@@ -254,10 +257,10 @@ export default function App() {
                   )}
                 </span>
                 <select
-                  aria-label="Cambiar perfil financiero"
+                  aria-label="Cambiar cuenta financiera"
                   value={activeWorkspaceId}
                   onChange={(e) => setActiveWorkspaceId(e.target.value)}
-                  className="appearance-none bg-slate-900 hover:bg-slate-800/80 border border-slate-800 rounded-xl pl-9 pr-8 py-1.5 text-sm font-semibold text-white focus:outline-none focus:border-emerald-500 max-w-[155px] sm:max-w-[210px] truncate transition cursor-pointer"
+                  className="appearance-none bg-slate-900 hover:bg-slate-800/80 border border-slate-800 rounded-xl pl-9 pr-8 py-1.5 text-sm font-semibold text-white focus:outline-none focus:border-emerald-500 max-w-[160px] sm:max-w-[210px] truncate transition cursor-pointer"
                 >
                   {workspaces.map((ws) => (
                     <option key={ws.id} value={ws.id}>
@@ -267,42 +270,60 @@ export default function App() {
                 </select>
                 <ChevronDown className="pointer-events-none w-4 h-4 text-slate-400 absolute right-2.5" />
               </div>
+            ) : (
+              <div className="min-w-0">
+                <p className="text-sm font-bold text-white leading-tight truncate">
+                  {activeTab === 'profile' ? 'Mi Perfil' : 'Mis Grupos'}
+                </p>
+                <p className="text-[11px] text-slate-400 leading-tight hidden sm:block">
+                  {activeTab === 'profile'
+                    ? 'Cuenta y seguridad'
+                    : 'Gastos compartidos'}
+                </p>
+              </div>
             )}
           </div>
 
           {/* Navegación escritorio */}
           <nav className="hidden md:flex items-center gap-1">
-            {navItems.map((item) => {
+            {navItems.map((item, idx) => {
               const Icon = item.icon;
               const active = activeTab === item.id;
               return (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => setActiveTab(item.id)}
-                  className={`flex items-center gap-1.5 px-2.5 lg:px-3 py-2 rounded-xl text-xs font-semibold transition cursor-pointer focus:outline-none ${
-                    active
-                      ? 'bg-emerald-500/15 text-emerald-400'
-                      : 'text-slate-400 hover:text-white hover:bg-slate-900'
-                  }`}
-                >
-                  <Icon className="w-4 h-4" />
-                  {item.label}
-                </button>
+                <div key={item.id} className="flex items-center">
+                  {/* Separador visual entre Grupos y las pestañas de Finanzas */}
+                  {idx === 1 && (
+                    <span className="w-px h-5 bg-slate-800 mx-1.5" aria-hidden="true" />
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab(item.id)}
+                    className={`flex items-center gap-1.5 px-2.5 lg:px-3 py-2 rounded-xl text-xs font-semibold transition cursor-pointer focus:outline-none ${
+                      active
+                        ? 'bg-emerald-500/15 text-emerald-400'
+                        : 'text-slate-400 hover:text-white hover:bg-slate-900'
+                    }`}
+                  >
+                    <Icon className="w-4 h-4" />
+                    {item.label}
+                  </button>
+                </div>
               );
             })}
           </nav>
 
-          {/* Derecha: botón rápido + acceso directo a Perfil */}
+          {/* Derecha: botón principal contextual + Perfil */}
           <div className="flex items-center gap-2 shrink-0">
-            <button
-              type="button"
-              onClick={handleQuickAdd}
-              className="hidden sm:flex items-center gap-1.5 px-3.5 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold text-xs rounded-xl transition cursor-pointer focus:outline-none"
-            >
-              <Plus className="w-4 h-4" />
-              {activeTab === 'groups' ? 'Gasto grupo' : 'Nuevo'}
-            </button>
+            {activeTab !== 'profile' && (
+              <button
+                type="button"
+                onClick={handleQuickAdd}
+                className="hidden sm:flex items-center gap-1.5 px-3.5 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold text-xs rounded-xl transition cursor-pointer focus:outline-none"
+              >
+                <Plus className="w-4 h-4" />
+                {activeTab === 'groups' ? 'Gasto grupo' : 'Nuevo'}
+              </button>
+            )}
 
             <button
               type="button"
@@ -429,7 +450,7 @@ export default function App() {
         )}
       </main>
 
-      {/* Botón flotante (+) para móvil — contextual (Calculadora en Grupos / Finanzas en el resto) */}
+      {/* Botón flotante (+) para móvil */}
       {activeTab !== 'profile' && (
         <button
           type="button"
