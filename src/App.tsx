@@ -65,34 +65,61 @@ export default function App() {
   const [editingTx, setEditingTx] = useState<Transaction | null>(null);
   const [groupNewTrigger, setGroupNewTrigger] = useState(0);
 
+  // Arranque seguro: nunca se queda colgado en el spinner si falla la red al abrir la PWA
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session);
-      setAuthReady(true);
-    });
+    let active = true;
+    const safetyTimer = window.setTimeout(() => {
+      if (active) setAuthReady(true);
+    }, 4000);
+
+    supabase.auth
+      .getSession()
+      .then(({ data }) => {
+        if (!active) return;
+        setSession(data.session);
+        setAuthReady(true);
+      })
+      .catch(() => {
+        if (!active) return;
+        setSession(null);
+        setAuthReady(true);
+      })
+      .finally(() => {
+        window.clearTimeout(safetyTimer);
+      });
 
     const { data: listener } = supabase.auth.onAuthStateChange((event, s) => {
       setSession(s);
+      setAuthReady(true);
       if (event === 'PASSWORD_RECOVERY') {
         setIsPasswordRecovery(true);
       }
     });
-    return () => listener.subscription.unsubscribe();
+
+    return () => {
+      active = false;
+      window.clearTimeout(safetyTimer);
+      listener.subscription.unsubscribe();
+    };
   }, []);
 
   const loadBaseData = useCallback(async (userId: string) => {
-    const [{ data: prof }, { data: wsList }] = await Promise.all([
-      supabase.from('profiles').select('*').eq('id', userId).single(),
-      supabase.from('workspaces').select('*').order('created_at', { ascending: true }),
-    ]);
+    try {
+      const [{ data: prof }, { data: wsList }] = await Promise.all([
+        supabase.from('profiles').select('*').eq('id', userId).single(),
+        supabase.from('workspaces').select('*').order('created_at', { ascending: true }),
+      ]);
 
-    if (prof) setProfile(prof as ProfileType);
-    if (wsList && wsList.length > 0) {
-      const typed = wsList as Workspace[];
-      setWorkspaces(typed);
-      setActiveWorkspaceId((prev) =>
-        typed.some((w) => w.id === prev) ? prev : typed[0].id
-      );
+      if (prof) setProfile(prof as ProfileType);
+      if (wsList && wsList.length > 0) {
+        const typed = wsList as Workspace[];
+        setWorkspaces(typed);
+        setActiveWorkspaceId((prev) =>
+          typed.some((w) => w.id === prev) ? prev : typed[0].id
+        );
+      }
+    } catch {
+      // Evita bloqueos silenciosos si falla la red
     }
   }, []);
 
@@ -101,49 +128,52 @@ export default function App() {
       if (!wsId) return;
       setLoadingData(true);
 
-      if (autoSyncRecurring) {
-        const d = new Date();
-        const currentMonthStart = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
-        await supabase.rpc('sync_recurring_transactions', {
-          p_workspace_id: wsId,
-          p_target_month: currentMonthStart,
-        });
+      try {
+        if (autoSyncRecurring) {
+          const d = new Date();
+          const currentMonthStart = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
+          await supabase.rpc('sync_recurring_transactions', {
+            p_workspace_id: wsId,
+            p_target_month: currentMonthStart,
+          });
+        }
+
+        const [
+          { data: cats },
+          { data: txs },
+          { data: rules },
+          { data: gList },
+        ] = await Promise.all([
+          supabase
+            .from('categories')
+            .select('*')
+            .eq('workspace_id', wsId)
+            .order('name', { ascending: true }),
+          supabase
+            .from('transactions')
+            .select('*, profiles(full_name, avatar_color)')
+            .eq('workspace_id', wsId)
+            .order('transaction_date', { ascending: false })
+            .order('created_at', { ascending: false }),
+          supabase
+            .from('recurring_rules')
+            .select('*')
+            .eq('workspace_id', wsId)
+            .order('day_of_month', { ascending: true }),
+          supabase
+            .from('savings_goals')
+            .select('*')
+            .eq('workspace_id', wsId)
+            .order('created_at', { ascending: true }),
+        ]);
+
+        setCategories((cats as Category[]) ?? []);
+        setTransactions((txs as unknown as Transaction[]) ?? []);
+        setRecurringRules((rules as RecurringRule[]) ?? []);
+        setGoals((gList as SavingsGoal[]) ?? []);
+      } finally {
+        setLoadingData(false);
       }
-
-      const [
-        { data: cats },
-        { data: txs },
-        { data: rules },
-        { data: gList },
-      ] = await Promise.all([
-        supabase
-          .from('categories')
-          .select('*')
-          .eq('workspace_id', wsId)
-          .order('name', { ascending: true }),
-        supabase
-          .from('transactions')
-          .select('*, profiles(full_name, avatar_color)')
-          .eq('workspace_id', wsId)
-          .order('transaction_date', { ascending: false })
-          .order('created_at', { ascending: false }),
-        supabase
-          .from('recurring_rules')
-          .select('*')
-          .eq('workspace_id', wsId)
-          .order('day_of_month', { ascending: true }),
-        supabase
-          .from('savings_goals')
-          .select('*')
-          .eq('workspace_id', wsId)
-          .order('created_at', { ascending: true }),
-      ]);
-
-      setCategories((cats as Category[]) ?? []);
-      setTransactions((txs as unknown as Transaction[]) ?? []);
-      setRecurringRules((rules as RecurringRule[]) ?? []);
-      setGoals((gList as SavingsGoal[]) ?? []);
-      setLoadingData(false);
     },
     []
   );
@@ -223,7 +253,6 @@ export default function App() {
     { id: 'settings', label: 'Ajustes', mobileLabel: 'Ajustes', icon: SettingsIcon },
   ];
 
-  // El selector de cuenta (JAVI / CASA) solo tiene sentido en las pestañas de Finanzas
   const showWorkspaceSelector =
     activeTab !== 'groups' && activeTab !== 'profile' && workspaces.length > 0;
 
@@ -291,7 +320,6 @@ export default function App() {
               const active = activeTab === item.id;
               return (
                 <div key={item.id} className="flex items-center">
-                  {/* Separador visual entre Grupos y las pestañas de Finanzas */}
                   {idx === 1 && (
                     <span className="w-px h-5 bg-slate-800 mx-1.5" aria-hidden="true" />
                   )}
